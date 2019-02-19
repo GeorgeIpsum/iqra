@@ -1,0 +1,29 @@
+{
+  "name": "iqra",
+  "version": "0.1.0",
+  "description": "an ebook reader",
+  "main": "main.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "electron ."
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/GeorgeIpsum/iqra.git"
+  },
+  "keywords": [
+    "ebook",
+    "epub",
+    "mobi",
+    "reader"
+  ],
+  "author": "G1N",
+  "license": "GPL-3.0",
+  "bugs": {
+    "url": "https://github.com/GeorgeIpsum/iqra/issues"
+  },
+  "homepage": "https://github.com/GeorgeIpsum/iqra#readme",
+  "devDependencies": {
+    "electron": "^4.0.5"
+  }
+}
