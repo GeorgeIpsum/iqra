@@ -24,5 +24,7 @@ before making structural decisions. Key locked decisions:
 
 ## Commands
 
-No build system exists yet (pre-scaffold). Update this section when the
-Xcode project / SPM packages land.
+- `swift test` — run all package tests (IqraCore, IqraLibrary); this is the primary gate
+- `swift test --filter <TestClassName>` — run one test class
+- `cd App && xcodegen generate` — regenerate the Xcode project (project.yml is the source of truth; iqra.xcodeproj is gitignored)
+- `xcodebuild -project App/iqra.xcodeproj -scheme iqra -destination 'platform=macOS' build` — build the app

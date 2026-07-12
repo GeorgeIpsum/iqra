@@ -1,0 +1,29 @@
+name: iqra
+options:
+  bundleIdPrefix: pro.tilli
+  deploymentTarget:
+    iOS: "17.0"
+    macOS: "14.0"
+packages:
+  Iqra:
+    path: ..
+targets:
+  iqra:
+    type: application
+    supportedDestinations: [iOS, macOS]
+    sources: [Sources]
+    dependencies:
+      - package: Iqra
+        product: IqraLibrary
+      - package: Iqra
+        product: IqraCore
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: iqra
+        ENABLE_HARDENED_RUNTIME: YES
+        ENABLE_APP_SANDBOX: YES
+        INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace: NO
+      configs:
+        Debug:
+          CODE_SIGN_IDENTITY: "-"
