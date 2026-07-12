@@ -101,6 +101,20 @@ final class ImportPipelineTests: XCTestCase {
         XCTAssertTrue(present)
     }
 
+    func testHashMatchIgnoresSoftDeletedBook() throws {
+        let epub = try Fixtures.makeEPUB(title: "Tombstoned", author: "A", isbn: nil, dir: dir)
+        guard case let .imported(bookID) = try pipeline.importFile(at: epub) else { return XCTFail() }
+        try dbm.writer.write { db in
+            try db.execute(sql: "UPDATE book SET deleted = 1 WHERE id = ?", arguments: [bookID.uuidString])
+        }
+        // re-importing the identical bytes must not skip/hydrate against a tombstoned book —
+        // it should import as a brand-new book, just like the identifier-match branch already does.
+        guard case let .imported(newBookID) = try pipeline.importFile(at: epub) else {
+            return XCTFail("expected a fresh import, not skip/hydrate against a deleted book")
+        }
+        XCTAssertNotEqual(newBookID, bookID)
+    }
+
     func testIdentifierMatchAsksThenAttaches() throws {
         // same ISBN, different bytes (different title string → different hash)
         let first = try Fixtures.makeEPUB(title: "Edition One", author: "A", isbn: "9780060512750", dir: dir)
@@ -118,6 +132,16 @@ final class ImportPipelineTests: XCTestCase {
         XCTAssertEqual(try store.fetchFormats(bookID: bookID).count, 2)
         let fileURL = paths.formatFile(bookID: bookID, formatID: formatID, type: .epub)
         XCTAssertTrue(FileManager.default.fileExists(atPath: fileURL.path))
+        // the "pending" row written by the .ask decision must not be orphaned: resolving
+        // the decision should reuse its id rather than mint a fresh one, so it lands in a
+        // terminal status instead of being stuck at "pending" forever.
+        XCTAssertEqual(try importCount(status: "pending"), 0)
+        let terminalRows = try dbm.writer.read { db in
+            try Int.fetchOne(db, sql: """
+                SELECT count(*) FROM import_item WHERE sourceDisplayPath = ? AND status = 'done'
+                """, arguments: [second.path])!
+        }
+        XCTAssertEqual(terminalRows, 1)
     }
 
     func testCrashAfterStagingLeavesNoDBRow() throws {
@@ -141,5 +165,24 @@ final class ImportPipelineTests: XCTestCase {
         XCTAssertEqual(folders.count, 1)
         let sidecarURL = paths.booksDir.appendingPathComponent(folders[0]).appendingPathComponent("metadata.json")
         XCTAssertNoThrow(try Sidecar.read(from: sidecarURL))
+    }
+
+    func testRealFailureMarksImportItemFailed() throws {
+        let epub = try Fixtures.makeEPUB(title: "RealFailure", author: "A", isbn: nil, dir: dir)
+        // Deterministic real-error injection (not a failpoint): pre-create the ".staging"
+        // path segment as a plain file instead of a directory. mkdir-with-intermediates
+        // then fails with a genuine "Not a directory" filesystem error — reproducible
+        // regardless of user/root permissions, unlike a chmod-based trick.
+        try FileManager.default.createDirectory(at: paths.booksDir, withIntermediateDirectories: true)
+        try Data().write(to: paths.stagingDir)
+        XCTAssertThrowsError(try pipeline.importFile(at: epub))
+        let row = try dbm.writer.read { db in
+            try Row.fetchOne(db, sql: """
+                SELECT status, message FROM import_item WHERE sourceDisplayPath = ?
+                """, arguments: [epub.path])
+        }
+        let unwrapped = try XCTUnwrap(row)
+        XCTAssertEqual(unwrapped["status"] as String, "failed")
+        XCTAssertNotNil(unwrapped["message"] as String?)
     }
 }
