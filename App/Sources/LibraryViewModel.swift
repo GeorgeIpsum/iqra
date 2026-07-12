@@ -7,11 +7,13 @@ import IqraLibrary
 final class LibraryViewModel {
     private(set) var books: [BookListItem] = []
     private(set) var quarantined: [ImportItemRecord] = []
+    private(set) var isReady = false
     var searchText = "" { didSet { Task { await refreshSearch() } } }
     var sort: BookSort = .titleSort { didSet { Task { await restartObservation() } } }
     var lastError: String?
-    var pendingIdentifierMatch: (sourceURL: URL, existingBookID: UUID)?
+    var pendingIdentifierMatches: [(sourceURL: URL, existingBookID: UUID)] = []
 
+    private var importErrors: [String] = []
     private var store: LibraryStore!
     private var pipeline: ImportPipeline!
     private var paths: LibraryPaths!
@@ -41,6 +43,7 @@ final class LibraryViewModel {
             try ReconciliationSweep.run(paths: paths, store: store, dbm: dbm)
             quarantined = try store.quarantinedItems()
             await restartObservation()
+            isReady = true
         } catch {
             lastError = "\(error)"
         }
@@ -53,24 +56,40 @@ final class LibraryViewModel {
     }
 
     func importFiles(_ urls: [URL]) async {
+        guard let pipeline, let store else {
+            lastError = "The library isn't ready yet. Please try again in a moment."
+            return
+        }
+        var batchErrors: [String] = []
         for url in urls {
             let scoped = url.startAccessingSecurityScopedResource()
             defer { if scoped { url.stopAccessingSecurityScopedResource() } }
             do {
                 let result = try pipeline.importFile(at: url)
                 if case let .needsUserDecision(existingBookID) = result {
-                    pendingIdentifierMatch = (url, existingBookID)
+                    pendingIdentifierMatches.append((url, existingBookID))
                 }
             } catch {
-                lastError = "Import failed for \(url.lastPathComponent): \(error)"
+                batchErrors.append("Import failed for \(url.lastPathComponent): \(error)")
             }
+        }
+        if !batchErrors.isEmpty {
+            importErrors.append(contentsOf: batchErrors)
+            lastError = importErrors.joined(separator: "\n")
         }
         quarantined = (try? store.quarantinedItems()) ?? quarantined
     }
 
+    /// Pops and resolves the first queued identifier-match prompt. The alert re-presents
+    /// automatically while the queue is non-empty (see `LibraryView`).
     func resolveIdentifierMatch(attach: Bool) async {
-        guard let pending = pendingIdentifierMatch else { return }
-        pendingIdentifierMatch = nil
+        guard !pendingIdentifierMatches.isEmpty else { return }
+        let pending = pendingIdentifierMatches.removeFirst()
+        guard let pipeline else {
+            importErrors.append("Couldn't resolve match for \(pending.sourceURL.lastPathComponent): library isn't ready.")
+            lastError = importErrors.joined(separator: "\n")
+            return
+        }
         let scoped = pending.sourceURL.startAccessingSecurityScopedResource()
         defer { if scoped { pending.sourceURL.stopAccessingSecurityScopedResource() } }
         do {
@@ -78,8 +97,21 @@ final class LibraryViewModel {
                 at: pending.sourceURL,
                 resolution: attach ? .attach(toBook: pending.existingBookID) : .importAsNewBook)
         } catch {
-            lastError = "\(error)"
+            importErrors.append("\(error)")
+            lastError = importErrors.joined(separator: "\n")
         }
+    }
+
+    /// Discards the first queued identifier-match prompt without importing it (user tapped Cancel).
+    func cancelPendingIdentifierMatch() {
+        guard !pendingIdentifierMatches.isEmpty else { return }
+        pendingIdentifierMatches.removeFirst()
+    }
+
+    /// Clears the error alert's state, including any accumulated batch-import errors.
+    func dismissError() {
+        lastError = nil
+        importErrors.removeAll()
     }
 
     private func refreshSearch() async {

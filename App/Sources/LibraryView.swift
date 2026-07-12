@@ -44,6 +44,7 @@ struct LibraryView: View {
                 }
                 ToolbarItem(placement: .primaryAction) {
                     Button("Import", systemImage: "plus") { showImporter = true }
+                        .disabled(!model.isReady)
                 }
             }
             .fileImporter(isPresented: $showImporter, allowedContentTypes: Self.bookTypes,
@@ -56,17 +57,17 @@ struct LibraryView: View {
                 QuarantineList(items: model.quarantined)
             }
             .alert("Same identifier as an existing book",
-                   isPresented: .init(get: { model.pendingIdentifierMatch != nil },
-                                      set: { if !$0 { model.pendingIdentifierMatch = nil } })) {
+                   isPresented: .init(get: { !model.pendingIdentifierMatches.isEmpty },
+                                      set: { _ in })) {
                 Button("Attach to existing book") { Task { await model.resolveIdentifierMatch(attach: true) } }
                 Button("Import as new book") { Task { await model.resolveIdentifierMatch(attach: false) } }
-                Button("Cancel", role: .cancel) {}
+                Button("Cancel", role: .cancel) { model.cancelPendingIdentifierMatch() }
             } message: {
                 Text("This file shares an identifier (e.g. ISBN) with a book already in your library.")
             }
             .alert("Error", isPresented: .init(get: { model.lastError != nil },
-                                               set: { if !$0 { model.lastError = nil } })) {
-                Button("OK") { model.lastError = nil }
+                                               set: { if !$0 { model.dismissError() } })) {
+                Button("OK") { model.dismissError() }
             } message: { Text(model.lastError ?? "") }
         }
     }
