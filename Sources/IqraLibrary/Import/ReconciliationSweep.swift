@@ -6,6 +6,9 @@ public struct SweepReport: Equatable, Sendable {
     public var stagingDeleted = 0
     public var orphansAdopted = 0
     public var formatsMarkedMissing = 0
+    /// Items whose per-item repair failed (bad orphan adoption, bad missing-binary update).
+    /// The sweep isolates these instead of letting one bad item abort the whole run.
+    public var failures = 0
     public init() {}
 }
 
@@ -25,6 +28,8 @@ public enum ReconciliationSweep {
         }
 
         // 2. orphan book folders (crash after rename, before DB row): adopt from sidecar.
+        // Each folder is isolated: one bad/corrupt orphan (e.g. a bookID collision) must not
+        // stop adoption of the rest, nor skip phase 3 below.
         let knownBookIDs: Set<String> = try dbm.writer.read { db in
             Set(try String.fetchAll(db, sql: "SELECT id FROM book"))
         }
@@ -33,12 +38,36 @@ public enum ReconciliationSweep {
                 let name = folder.lastPathComponent
                 guard !knownBookIDs.contains(name) else { continue }
                 guard let sidecar = try? Sidecar.read(from: folder.appendingPathComponent("metadata.json")),
-                      let entry = sidecar.formats.first else { continue } // undescribed folder: leave for the user
-                try store.insertBook(metadata: sidecar.metadata, formatType: entry.formatType,
-                                     originalFileName: entry.originalFileName,
-                                     byteSize: entry.byteSize, contentHash: entry.contentHash,
-                                     bookID: sidecar.bookID, formatID: entry.formatID)
-                report.orphansAdopted += 1
+                      let firstFormat = sidecar.formats.first else { continue } // undescribed folder: leave for the user
+                do {
+                    try store.insertBook(metadata: sidecar.metadata, formatType: firstFormat.formatType,
+                                         originalFileName: firstFormat.originalFileName,
+                                         byteSize: firstFormat.byteSize, contentHash: firstFormat.contentHash,
+                                         bookID: sidecar.bookID, formatID: firstFormat.formatID)
+                    // A multi-format book can crash into orphanhood too (ImportPipeline.attach
+                    // appends to the sidecar's formats array) -- adopt every remaining format
+                    // so none are silently dropped, mirroring the DB portion of attach().
+                    for extra in sidecar.formats.dropFirst() {
+                        let file = folder.appendingPathComponent(
+                            "\(extra.formatID.uuidString).\(extra.formatType.fileExtension)")
+                        let present = fm.fileExists(atPath: file.path)
+                        try dbm.writer.write { db in
+                            let seq = try dbm.nextApplySequence(db)
+                            try FormatRecord(id: extra.formatID.uuidString, bookId: sidecar.bookID.uuidString,
+                                             formatType: extra.formatType.rawValue,
+                                             originalFileName: extra.originalFileName, byteSize: extra.byteSize,
+                                             contentHash: extra.contentHash, addedAt: Date(),
+                                             applySeq: seq, deleted: false).insert(db)
+                            try db.execute(sql: """
+                                INSERT INTO format_local (formatId, present, localVerifiedAt, missing)
+                                VALUES (?, ?, ?, ?)
+                                """, arguments: [extra.formatID.uuidString, present, present ? Date() : nil, !present])
+                        }
+                    }
+                    report.orphansAdopted += 1
+                } catch {
+                    report.failures += 1
+                }
             }
         }
 
@@ -56,12 +85,16 @@ public enum ReconciliationSweep {
                   let type = FormatType(rawValue: row.type) else { continue }
             let file = paths.formatFile(bookID: bookID, formatID: formatID, type: type)
             if !fm.fileExists(atPath: file.path) {
-                try dbm.writer.write { db in
-                    try db.execute(sql: """
-                        UPDATE format_local SET present = 0, missing = 1 WHERE formatId = ?
-                        """, arguments: [row.formatId])
+                do {
+                    try dbm.writer.write { db in
+                        try db.execute(sql: """
+                            UPDATE format_local SET present = 0, missing = 1 WHERE formatId = ?
+                            """, arguments: [row.formatId])
+                    }
+                    report.formatsMarkedMissing += 1
+                } catch {
+                    report.failures += 1
                 }
-                report.formatsMarkedMissing += 1
             }
         }
         return report
