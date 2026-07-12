@@ -92,3 +92,83 @@ public final class LibraryStore: @unchecked Sendable {
         }
     }
 }
+
+public struct BookListItem: Identifiable, Equatable, Sendable {
+    public let id: UUID
+    public let title: String
+    public let authors: String
+    public let addedAt: Date
+}
+
+public enum BookSort: String, CaseIterable, Sendable {
+    case titleSort, recentlyAdded, authorSort
+
+    var sql: String {
+        switch self {
+        case .titleSort: "b.titleSort COLLATE NOCASE ASC"
+        case .recentlyAdded: "b.addedAt DESC"
+        case .authorSort: "authors COLLATE NOCASE ASC, b.titleSort COLLATE NOCASE ASC"
+        }
+    }
+}
+
+extension LibraryStore {
+    private static let listSQL = """
+        SELECT b.id AS id, b.title AS title, b.addedAt AS addedAt,
+               COALESCE(group_concat(c.name, ', '), '') AS authors
+        FROM book b
+        LEFT JOIN book_contributor bc ON bc.bookId = b.id AND bc.role = 'author'
+        LEFT JOIN contributor c ON c.id = bc.contributorId
+        WHERE b.deleted = 0 %WHERE%
+        GROUP BY b.id
+        """
+
+    private static func mapItems(_ rows: [Row]) -> [BookListItem] {
+        rows.compactMap { row in
+            guard let id = UUID(uuidString: row["id"]) else { return nil }
+            return BookListItem(id: id, title: row["title"], authors: row["authors"],
+                                addedAt: row["addedAt"])
+        }
+    }
+
+    public func listBooks(sort: BookSort) throws -> [BookListItem] {
+        try dbm.writer.read { db in
+            let sql = Self.listSQL.replacingOccurrences(of: "%WHERE%", with: "")
+                + " ORDER BY \(sort.sql)"
+            return Self.mapItems(try Row.fetchAll(db, sql: sql))
+        }
+    }
+
+    public func searchBooks(_ query: String) throws -> [BookListItem] {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return try listBooks(sort: .titleSort) }
+        // quote each token and add prefix-match star; quoting neutralizes FTS operators in user input
+        let match = trimmed.split(separator: " ")
+            .map { "\"\($0.replacingOccurrences(of: "\"", with: ""))\"*" }
+            .joined(separator: " ")
+        return try dbm.writer.read { db in
+            let sql = Self.listSQL.replacingOccurrences(
+                of: "%WHERE%",
+                with: "AND b.id IN (SELECT bookId FROM fts.book_fts WHERE book_fts MATCH ?)")
+                + " ORDER BY b.titleSort COLLATE NOCASE ASC"
+            return Self.mapItems(try Row.fetchAll(db, sql: sql, arguments: [match]))
+        }
+    }
+
+    public func quarantinedItems() throws -> [ImportItemRecord] {
+        try dbm.writer.read { db in
+            try ImportItemRecord
+                .filter(Column("status") == "quarantined" || Column("status") == "failed")
+                .order(Column("updatedAt").desc)
+                .fetchAll(db)
+        }
+    }
+
+    public func observeBooks(sort: BookSort) -> ValueObservation<ValueReducers.Fetch<[BookListItem]>> {
+        ValueObservation.tracking { db in
+            let sql = Self.listSQL.replacingOccurrences(of: "%WHERE%", with: "")
+                + " ORDER BY \(sort.sql)"
+            return Self.mapItems(try Row.fetchAll(db, sql: sql))
+        }
+    }
+}
