@@ -15,7 +15,7 @@ final class FormatSnifferTests: XCTestCase {
     func zipFile(entries: [(name: String, data: Data)]) throws -> URL {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString + ".zip")
-        let archive = try Archive(url: url, accessMode: .create)
+        let archive = try Archive(url: url, accessMode: .create, pathEncoding: nil)
         for e in entries {
             try archive.addEntry(with: e.name, type: .file,
                                  uncompressedSize: Int64(e.data.count),

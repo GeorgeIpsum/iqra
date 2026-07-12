@@ -18,7 +18,7 @@ public enum FormatSniffer {
         if head.count >= 68, head[60..<68] == Data("BOOKMOBI".utf8) { return .recognized(.mobi) }
         if head.starts(with: Data([0x50, 0x4B, 0x03, 0x04])) {
             // zip: EPUB iff the mimetype entry says so; otherwise treat as comic archive
-            guard let archive = try? Archive(url: fileURL, accessMode: .read) else { return .unrecognized }
+            guard let archive = try? Archive(url: fileURL, accessMode: .read, pathEncoding: nil) else { return .unrecognized }
             if let entry = archive["mimetype"] {
                 var content = Data()
                 _ = try? archive.extract(entry) { content.append($0) }
