@@ -3,16 +3,30 @@ import CoreGraphics
 import ImageIO
 import UniformTypeIdentifiers
 
+public enum ThumbnailResult: Equatable, Sendable {
+    case written
+    case skippedNoCover
+    case failedInvalidImage
+}
+
 public enum ThumbnailPipeline {
     /// Eager thumbnails at import time, never at scroll time (spec).
-    public static func process(coverData: Data?, bookDir: URL, bookID: UUID,
-                               caches: LibraryPaths.Caches) throws {
-        guard let coverData else { return }
-        try coverData.write(to: bookDir.appendingPathComponent("cover.jpg"), options: .atomic)
+    ///
+    /// Layout knowledge (cover.jpg location, thumbnails directory) lives entirely in
+    /// `LibraryPaths`/`LibraryPaths.Caches` — this pipeline only asks for destinations.
+    @discardableResult
+    public static func process(coverData: Data?, bookID: UUID, paths: LibraryPaths,
+                               caches: LibraryPaths.Caches) throws -> ThumbnailResult {
+        guard let coverData else { return .skippedNoCover }
 
-        let thumbsDir = caches.root.appendingPathComponent("thumbnails", isDirectory: true)
+        guard let source = CGImageSourceCreateWithData(coverData as CFData, nil),
+              CGImageSourceGetCount(source) > 0
+        else { return .failedInvalidImage }
+
+        try coverData.write(to: paths.cover(bookID: bookID), options: .atomic)
+
+        let thumbsDir = caches.thumbnail(bookID: bookID, size: .grid).deletingLastPathComponent()
         try FileManager.default.createDirectory(at: thumbsDir, withIntermediateDirectories: true)
-        guard let source = CGImageSourceCreateWithData(coverData as CFData, nil) else { return }
         for size in ThumbnailSize.allCases {
             let options: [CFString: Any] = [
                 kCGImageSourceCreateThumbnailFromImageAlways: true,
@@ -28,5 +42,6 @@ public enum ThumbnailPipeline {
             guard CGImageDestinationFinalize(dest) else { continue }
             try (out as Data).write(to: caches.thumbnail(bookID: bookID, size: size), options: .atomic)
         }
+        return .written
     }
 }

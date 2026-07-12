@@ -20,6 +20,24 @@ enum Fixtures {
         return out as Data
     }
 
+    /// A 600x400 red JPEG — large enough that thumbnail max-pixel downscaling is observable
+    /// (tinyJPEG's 4x4 is already smaller than every thumbnail cap, so it can't catch a
+    /// copy-the-original bug).
+    static func largeJPEG() -> Data {
+        let width = 600, height = 400
+        let ctx = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+                            space: CGColorSpaceCreateDeviceRGB(),
+                            bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)!
+        ctx.setFillColor(CGColor(red: 1, green: 0, blue: 0, alpha: 1))
+        ctx.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        let image = ctx.makeImage()!
+        let out = NSMutableData()
+        let dest = CGImageDestinationCreateWithData(out, UTType.jpeg.identifier as CFString, 1, nil)!
+        CGImageDestinationAddImage(dest, image, nil)
+        CGImageDestinationFinalize(dest)
+        return out as Data
+    }
+
     static func makeEPUB(title: String, author: String, isbn: String?, language: String = "en",
                          coverJPEG: Data? = nil, encrypted: Bool = false, encryptionXML: String? = nil,
                          dir: URL) throws -> URL {
