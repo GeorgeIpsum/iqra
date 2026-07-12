@@ -27,7 +27,7 @@ public final class ImportPipeline {
     let paths: LibraryPaths
     let caches: LibraryPaths.Caches
 
-    enum Failpoint { case afterStaging, afterRename }
+    enum Failpoint { case afterStaging, afterRename, afterAttachFileMove, afterAttachSidecar }
     struct FailpointError: Error {}
     /// A real (non-simulated) error: the on-disk contentHash for a format didn't match the
     /// hash the caller matched on. Distinct from `FailpointError`, which exists solely to
@@ -196,25 +196,28 @@ public final class ImportPipeline {
         }
     }
 
+    // Crash-safe ordering mirrors the main import path: all filesystem state (file, then
+    // sidecar) lands before the DB row. A crash after the file move but before the DB row
+    // leaves an orphaned <formatUUID>.<ext> file with no sidecar/DB trace — an invisible
+    // leak the sweep doesn't reconcile yet (ticketed for M2), but harmless because nothing
+    // references it. A crash after the sidecar write leaves the sidecar listing a format the
+    // DB doesn't know about yet — the self-describing-folder invariant (sidecar ⊇ DB formats
+    // for the book) still holds, so a rebuild-from-sidecar would recover the format whose
+    // file already exists on disk.
     private func attach(url: URL, to bookID: UUID, type: FormatType,
                         hash: String, metadata: ExtractedMetadata) throws -> UUID {
         let formatID = UUID()
+
+        // 1. copy+fsync the file into place.
         let dest = paths.formatFile(bookID: bookID, formatID: formatID, type: type)
         let tmp = dest.appendingPathExtension("partial")
         try FileManager.default.copyItem(at: url, to: tmp)
         try fsync(tmp)
         try FileManager.default.moveItem(at: tmp, to: dest)
         let byteSize = (try FileManager.default.attributesOfItem(atPath: dest.path)[.size] as? Int64) ?? 0
-        try dbm.writer.write { db in
-            let seq = try dbm.nextApplySequence(db)
-            try FormatRecord(id: formatID.uuidString, bookId: bookID.uuidString,
-                             formatType: type.rawValue, originalFileName: url.lastPathComponent,
-                             byteSize: byteSize, contentHash: hash, addedAt: Date(),
-                             applySeq: seq, deleted: false).insert(db)
-            try db.execute(sql: "INSERT INTO format_local (formatId, present, localVerifiedAt, missing) VALUES (?, 1, ?, 0)",
-                           arguments: [formatID.uuidString, Date()])
-        }
-        // keep the sidecar self-describing
+        try hit(.afterAttachFileMove)
+
+        // 2. update the sidecar so the folder stays self-describing.
         let sidecarURL = paths.metadataSidecar(bookID: bookID)
         if let sidecar = try? Sidecar.read(from: sidecarURL) {
             let updated = Sidecar(bookID: sidecar.bookID, metadata: sidecar.metadata,
@@ -223,6 +226,18 @@ public final class ImportPipeline {
                                                                 byteSize: byteSize, contentHash: hash)],
                               applySeq: sidecar.applySeq)
             try Sidecar.write(updated, to: sidecarURL)
+        }
+        try hit(.afterAttachSidecar)
+
+        // 3. DB row last.
+        try dbm.writer.write { db in
+            let seq = try dbm.nextApplySequence(db)
+            try FormatRecord(id: formatID.uuidString, bookId: bookID.uuidString,
+                             formatType: type.rawValue, originalFileName: url.lastPathComponent,
+                             byteSize: byteSize, contentHash: hash, addedAt: Date(),
+                             applySeq: seq, deleted: false).insert(db)
+            try db.execute(sql: "INSERT INTO format_local (formatId, present, localVerifiedAt, missing) VALUES (?, 1, ?, 0)",
+                           arguments: [formatID.uuidString, Date()])
         }
         return formatID
     }

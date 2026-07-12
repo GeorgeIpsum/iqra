@@ -144,6 +144,55 @@ final class ImportPipelineTests: XCTestCase {
         XCTAssertEqual(terminalRows, 1)
     }
 
+    func testCrashAfterAttachFileMoveLeavesNoDBRowOrSidecarEntry() throws {
+        let first = try Fixtures.makeEPUB(title: "Edition One", author: "A", isbn: "9780060512750", dir: dir)
+        let second = try Fixtures.makeEPUB(title: "Edition Two", author: "A", isbn: "9780060512750", dir: dir)
+        guard case let .imported(bookID) = try pipeline.importFile(at: first) else { return XCTFail() }
+        XCTAssertEqual(try pipeline.importFile(at: second), .needsUserDecision(existingBookID: bookID))
+
+        let beforeFiles = Set(try FileManager.default.contentsOfDirectory(atPath: paths.bookDir(bookID).path))
+        pipeline.failpoint = .afterAttachFileMove
+        XCTAssertThrowsError(try pipeline.importFile(at: second, resolution: .attach(toBook: bookID)))
+
+        // no DB row for the new format
+        XCTAssertEqual(try store.fetchFormats(bookID: bookID).count, 1)
+        // sidecar unchanged — still lists only the original format
+        let sidecar = try Sidecar.read(from: paths.metadataSidecar(bookID: bookID))
+        XCTAssertEqual(sidecar.formats.count, 1)
+        // the orphaned <formatUUID>.<ext> file from the crashed attach is present (current
+        // behavior: it's an invisible leak the sweep doesn't reconcile — ticketed for M2).
+        let afterFiles = Set(try FileManager.default.contentsOfDirectory(atPath: paths.bookDir(bookID).path))
+        let newFiles = afterFiles.subtracting(beforeFiles)
+        XCTAssertEqual(newFiles.count, 1)
+        XCTAssertTrue(newFiles.first?.hasSuffix(".epub") ?? false)
+    }
+
+    func testCrashAfterAttachSidecarLeavesSidecarAheadOfDB() throws {
+        let first = try Fixtures.makeEPUB(title: "Edition One", author: "A", isbn: "9780060512750", dir: dir)
+        let second = try Fixtures.makeEPUB(title: "Edition Two", author: "A", isbn: "9780060512750", dir: dir)
+        guard case let .imported(bookID) = try pipeline.importFile(at: first) else { return XCTFail() }
+        XCTAssertEqual(try pipeline.importFile(at: second), .needsUserDecision(existingBookID: bookID))
+
+        pipeline.failpoint = .afterAttachSidecar
+        XCTAssertThrowsError(try pipeline.importFile(at: second, resolution: .attach(toBook: bookID)))
+
+        // DB still only knows about the original format
+        let dbFormats = try store.fetchFormats(bookID: bookID)
+        XCTAssertEqual(dbFormats.count, 1)
+        // sidecar is already ahead of the DB — it lists the new format
+        let sidecar = try Sidecar.read(from: paths.metadataSidecar(bookID: bookID))
+        XCTAssertEqual(sidecar.formats.count, 2)
+        // self-describing-folder invariant: sidecar formats are a superset of DB formats for
+        // this book, so a rebuild-from-sidecar would recover the format whose file already
+        // exists — the crash never corrupts that invariant.
+        let dbHashes = Set(dbFormats.map(\.contentHash))
+        let sidecarHashes = Set(sidecar.formats.map(\.contentHash))
+        XCTAssertTrue(dbHashes.isSubset(of: sidecarHashes))
+        let newEntry = try XCTUnwrap(sidecar.formats.first { !dbHashes.contains($0.contentHash) })
+        let fileURL = paths.formatFile(bookID: bookID, formatID: newEntry.formatID, type: newEntry.formatType)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: fileURL.path))
+    }
+
     func testCrashAfterStagingLeavesNoDBRow() throws {
         let epub = try Fixtures.makeEPUB(title: "Crash1", author: "A", isbn: nil, dir: dir)
         pipeline.failpoint = .afterStaging
