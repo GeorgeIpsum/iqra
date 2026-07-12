@@ -144,6 +144,37 @@ final class ImportPipelineTests: XCTestCase {
         XCTAssertEqual(terminalRows, 1)
     }
 
+    func testAttachAsNewBookImportsSecondEditionAsSeparateBook() throws {
+        // same ISBN, different bytes (different title string → different hash)
+        let first = try Fixtures.makeEPUB(title: "Edition One", author: "A", isbn: "9780060512750", dir: dir)
+        let second = try Fixtures.makeEPUB(title: "Edition Two", author: "A", isbn: "9780060512750", dir: dir)
+        guard case let .imported(firstBookID) = try pipeline.importFile(at: first) else { return XCTFail() }
+        // default: never silent
+        XCTAssertEqual(try pipeline.importFile(at: second), .needsUserDecision(existingBookID: firstBookID))
+        XCTAssertEqual(try importCount(status: "pending"), 1)
+
+        // user chose to keep both editions as separate books
+        guard case let .imported(secondBookID) =
+            try pipeline.importFile(at: second, resolution: .importAsNewBook) else {
+            return XCTFail("expected imported")
+        }
+        XCTAssertNotEqual(secondBookID, firstBookID)
+        XCTAssertEqual(try dbm.writer.read { try Int.fetchOne($0, sql: "SELECT count(*) FROM book")! }, 2)
+        let book = try XCTUnwrap(store.fetchBook(secondBookID))
+        XCTAssertEqual(book.title, "Edition Two")
+
+        // the "pending" row written by the .ask decision must not be orphaned: resolving
+        // the decision (even as a new book, not an attach) reuses its id and lands it in a
+        // terminal status.
+        XCTAssertEqual(try importCount(status: "pending"), 0)
+        let terminalRows = try dbm.writer.read { db in
+            try Int.fetchOne(db, sql: """
+                SELECT count(*) FROM import_item WHERE sourceDisplayPath = ? AND status = 'done'
+                """, arguments: [second.path])!
+        }
+        XCTAssertEqual(terminalRows, 1)
+    }
+
     func testCrashAfterAttachFileMoveLeavesNoDBRowOrSidecarEntry() throws {
         let first = try Fixtures.makeEPUB(title: "Edition One", author: "A", isbn: "9780060512750", dir: dir)
         let second = try Fixtures.makeEPUB(title: "Edition Two", author: "A", isbn: "9780060512750", dir: dir)
