@@ -107,20 +107,39 @@ public enum BookSort: String, CaseIterable, Sendable {
         switch self {
         case .titleSort: "b.titleSort COLLATE NOCASE ASC"
         case .recentlyAdded: "b.addedAt DESC"
-        case .authorSort: "authors COLLATE NOCASE ASC, b.titleSort COLLATE NOCASE ASC"
+        case .authorSort:
+            // NULL authorSortKey (books with no author) sorts last, deterministically.
+            "(authorSortKey IS NULL) ASC, authorSortKey COLLATE NOCASE ASC, b.titleSort COLLATE NOCASE ASC"
         }
     }
 }
 
 extension LibraryStore {
+    // Both `authors` and `authorSortKey` are derived from correlated subqueries over
+    // book_contributor rows ordered by `ordinal`, rather than a flat LEFT JOIN +
+    // group_concat: group_concat has no ordering guarantee of its own (it happens to
+    // follow rowid/insertion order), and the display name is not a valid sort key
+    // (e.g. "Ursula K. Le Guin" must sort under "Le Guin", not "Ursula").
     private static let listSQL = """
         SELECT b.id AS id, b.title AS title, b.addedAt AS addedAt,
-               COALESCE(group_concat(c.name, ', '), '') AS authors
+               COALESCE((
+                   SELECT group_concat(name, ', ') FROM (
+                       SELECT c.name AS name
+                       FROM book_contributor bc
+                       JOIN contributor c ON c.id = bc.contributorId
+                       WHERE bc.bookId = b.id AND bc.role = 'author'
+                       ORDER BY bc.ordinal
+                   )
+               ), '') AS authors,
+               (
+                   SELECT c.sortName
+                   FROM book_contributor bc
+                   JOIN contributor c ON c.id = bc.contributorId
+                   WHERE bc.bookId = b.id AND bc.role = 'author'
+                   ORDER BY bc.ordinal LIMIT 1
+               ) AS authorSortKey
         FROM book b
-        LEFT JOIN book_contributor bc ON bc.bookId = b.id AND bc.role = 'author'
-        LEFT JOIN contributor c ON c.id = bc.contributorId
         WHERE b.deleted = 0 %WHERE%
-        GROUP BY b.id
         """
 
     private static func mapItems(_ rows: [Row]) -> [BookListItem] {
@@ -131,10 +150,16 @@ extension LibraryStore {
         }
     }
 
+    /// Assembles the shared list query: substitutes an extra WHERE clause (or "") into
+    /// `listSQL` and appends an ORDER BY. Used by `listBooks`, `searchBooks`, and
+    /// `observeBooks` so the query shape stays in one place.
+    private static func assembleSQL(extraWhere: String = "", orderBy: String) -> String {
+        listSQL.replacingOccurrences(of: "%WHERE%", with: extraWhere) + " ORDER BY \(orderBy)"
+    }
+
     public func listBooks(sort: BookSort) throws -> [BookListItem] {
         try dbm.writer.read { db in
-            let sql = Self.listSQL.replacingOccurrences(of: "%WHERE%", with: "")
-                + " ORDER BY \(sort.sql)"
+            let sql = Self.assembleSQL(orderBy: sort.sql)
             return Self.mapItems(try Row.fetchAll(db, sql: sql))
         }
     }
@@ -147,16 +172,17 @@ extension LibraryStore {
             .map { "\"\($0.replacingOccurrences(of: "\"", with: ""))\"*" }
             .joined(separator: " ")
         return try dbm.writer.read { db in
-            let sql = Self.listSQL.replacingOccurrences(
-                of: "%WHERE%",
-                with: "AND b.id IN (SELECT bookId FROM fts.book_fts WHERE book_fts MATCH ?)")
-                + " ORDER BY b.titleSort COLLATE NOCASE ASC"
+            let sql = Self.assembleSQL(
+                extraWhere: "AND b.id IN (SELECT bookId FROM fts.book_fts WHERE book_fts MATCH ?)",
+                orderBy: "b.titleSort COLLATE NOCASE ASC")
             return Self.mapItems(try Row.fetchAll(db, sql: sql, arguments: [match]))
         }
     }
 
     public func quarantinedItems() throws -> [ImportItemRecord] {
         try dbm.writer.read { db in
+            // 'failed' is intentionally included alongside 'quarantined': the recovery
+            // UI surfaces both so the user can retry or resolve import failures.
             try ImportItemRecord
                 .filter(Column("status") == "quarantined" || Column("status") == "failed")
                 .order(Column("updatedAt").desc)
@@ -166,8 +192,7 @@ extension LibraryStore {
 
     public func observeBooks(sort: BookSort) -> ValueObservation<ValueReducers.Fetch<[BookListItem]>> {
         ValueObservation.tracking { db in
-            let sql = Self.listSQL.replacingOccurrences(of: "%WHERE%", with: "")
-                + " ORDER BY \(sort.sql)"
+            let sql = Self.assembleSQL(orderBy: sort.sql)
             return Self.mapItems(try Row.fetchAll(db, sql: sql))
         }
     }
