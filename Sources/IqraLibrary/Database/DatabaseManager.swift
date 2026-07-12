@@ -110,7 +110,7 @@ public final class DatabaseManager: @unchecked Sendable {
                 t.column("deleted", .boolean).notNull().defaults(to: false)
             }
             try db.create(table: "format_local") { t in        // per-device availability; NEVER synced
-                t.primaryKey("formatId", .text)
+                t.primaryKey("formatId", .text).references("format")
                 t.column("present", .boolean).notNull()
                 t.column("localVerifiedAt", .datetime)
                 t.column("missing", .boolean).notNull().defaults(to: false) // row exists but folder lost (reconciliation)
