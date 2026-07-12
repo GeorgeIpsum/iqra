@@ -34,4 +34,9 @@ final class PDFMetadataExtractorTests: XCTestCase {
         try Data("%PDF-1.7 not really".utf8).write(to: url)
         XCTAssertEqual(PDFMetadataExtractor.extract(fileURL: url), .rejected(.corruptContainer))
     }
+
+    func testEncryptedPDFIsRejectedAsDRM() throws {
+        let url = try Fixtures.makePDF(title: "Secret", author: "Someone", password: "s3cr3t", dir: dir)
+        XCTAssertEqual(PDFMetadataExtractor.extract(fileURL: url), .rejected(.drmProtected))
+    }
 }

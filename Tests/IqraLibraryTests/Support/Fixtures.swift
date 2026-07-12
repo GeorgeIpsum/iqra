@@ -80,12 +80,16 @@ enum Fixtures {
         return url
     }
 
-    static func makePDF(title: String?, author: String?, dir: URL) throws -> URL {
+    static func makePDF(title: String?, author: String?, password: String? = nil, dir: URL) throws -> URL {
         let url = dir.appendingPathComponent(UUID().uuidString + ".pdf")
         var mediaBox = CGRect(x: 0, y: 0, width: 200, height: 300)
         var info: [CFString: Any] = [:]
         if let title { info[kCGPDFContextTitle] = title }
         if let author { info[kCGPDFContextAuthor] = author }
+        if let password {
+            info[kCGPDFContextOwnerPassword] = password
+            info[kCGPDFContextUserPassword] = password
+        }
         let ctx = CGContext(url as CFURL, mediaBox: &mediaBox, info as CFDictionary)!
         ctx.beginPDFPage(nil)
         ctx.setFillColor(CGColor(red: 0, green: 0, blue: 1, alpha: 1))
