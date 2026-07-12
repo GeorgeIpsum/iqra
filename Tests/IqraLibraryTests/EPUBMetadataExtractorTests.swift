@@ -19,14 +19,49 @@ final class EPUBMetadataExtractorTests: XCTestCase {
         XCTAssertEqual(meta.titleSort, "Left Hand of Darkness, The")
         XCTAssertEqual(meta.contributors.map(\.name), ["Ursula K. Le Guin"])
         XCTAssertEqual(meta.contributors.first?.role, .author)
+        XCTAssertEqual(meta.contributors.first?.sortName, "Le Guin, Ursula K.")
         XCTAssertTrue(meta.identifiers.contains(BookIdentifier(type: "isbn", value: "9780441478125")))
         XCTAssertEqual(meta.language, "en")
         XCTAssertNotNil(coverData)
     }
 
+    func testAuthorSortHandlesCompoundSurnames() {
+        XCTAssertEqual(EPUBMetadataExtractor.makeAuthorSort("Ursula K. Le Guin"), "Le Guin, Ursula K.")
+        XCTAssertEqual(EPUBMetadataExtractor.makeAuthorSort("John von Neumann"), "von Neumann, John")
+        XCTAssertEqual(EPUBMetadataExtractor.makeAuthorSort("Frank Herbert"), "Herbert, Frank")
+        XCTAssertEqual(EPUBMetadataExtractor.makeAuthorSort("Plato"), "Plato")
+    }
+
     func testEncryptedEPUBIsRejectedAsDRM() throws {
         let url = try Fixtures.makeEPUB(title: "Locked", author: "X", isbn: nil,
                                         encrypted: true, dir: dir)
+        XCTAssertEqual(EPUBMetadataExtractor.extract(fileURL: url), .rejected(.drmProtected))
+    }
+
+    func testFontObfuscationOnlyEPUBIsExtracted() throws {
+        let url = try Fixtures.makeEPUB(title: "Fonts OK", author: "X", isbn: nil, encryptionXML: """
+            <encryption xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+              <EncryptedData xmlns="http://www.w3.org/2001/04/xmlenc#">
+                <EncryptionMethod Algorithm="http://www.idpf.org/2008/embedding"/>
+              </EncryptedData>
+            </encryption>
+            """, dir: dir)
+        guard case .extracted = EPUBMetadataExtractor.extract(fileURL: url) else {
+            return XCTFail("expected extraction to succeed for font-obfuscation-only encryption.xml")
+        }
+    }
+
+    func testMixedFontAndContentEncryptionIsRejectedAsDRM() throws {
+        let url = try Fixtures.makeEPUB(title: "Mixed", author: "X", isbn: nil, encryptionXML: """
+            <encryption xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+              <EncryptedData xmlns="http://www.w3.org/2001/04/xmlenc#">
+                <EncryptionMethod Algorithm="http://www.idpf.org/2008/embedding"/>
+              </EncryptedData>
+              <EncryptedData xmlns="http://www.w3.org/2001/04/xmlenc#">
+                <EncryptionMethod Algorithm="http://www.w3.org/2001/04/xmlenc#aes128-cbc"/>
+              </EncryptedData>
+            </encryption>
+            """, dir: dir)
         XCTAssertEqual(EPUBMetadataExtractor.extract(fileURL: url), .rejected(.drmProtected))
     }
 

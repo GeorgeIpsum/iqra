@@ -21,7 +21,8 @@ enum Fixtures {
     }
 
     static func makeEPUB(title: String, author: String, isbn: String?, language: String = "en",
-                         coverJPEG: Data? = nil, encrypted: Bool = false, dir: URL) throws -> URL {
+                         coverJPEG: Data? = nil, encrypted: Bool = false, encryptionXML: String? = nil,
+                         dir: URL) throws -> URL {
         let url = dir.appendingPathComponent(UUID().uuidString + ".epub")
         let archive = try Archive(url: url, accessMode: .create, pathEncoding: nil)
         func add(_ name: String, _ text: String) throws {
@@ -36,7 +37,9 @@ enum Fixtures {
               <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
             </container>
             """)
-        if encrypted {
+        if let encryptionXML {
+            try add("META-INF/encryption.xml", encryptionXML)
+        } else if encrypted {
             try add("META-INF/encryption.xml", """
                 <encryption xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
                   <EncryptedData xmlns="http://www.w3.org/2001/04/xmlenc#">

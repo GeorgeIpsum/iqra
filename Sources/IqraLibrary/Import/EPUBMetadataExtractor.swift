@@ -19,11 +19,9 @@ public enum EPUBMetadataExtractor {
             return data
         }
         // DRM check (spec: encryption.xml beyond font obfuscation → quarantine).
-        if let enc = read("META-INF/encryption.xml") {
-            let text = String(decoding: enc, as: UTF8.self)
-            let fontOnly = text.contains("http://www.idpf.org/2008/embedding")
-                || text.contains("http://ns.adobe.com/pdf/enc#RC")
-            if !fontOnly { return .rejected(.drmProtected) }
+        if let enc = read("META-INF/encryption.xml"),
+           !EncryptionXMLParser.isFontObfuscationOnly(enc) {
+            return .rejected(.drmProtected)
         }
         guard let containerData = read("META-INF/container.xml"),
               let opfPath = OPFPathParser.parse(containerData),
@@ -50,11 +48,51 @@ public enum EPUBMetadataExtractor {
         return .extracted(metadata, coverData: coverData)
     }
 
-    /// "Ursula K. Le Guin" → "Le Guin, Ursula K." — naive last-token inversion, calibre's default method.
+    /// Known surname prefixes absorbed into the surname during inversion (calibre's approach),
+    /// e.g. "Le Guin", "von Neumann", "de la Cruz".
+    private static let surnamePrefixes: Set<String> = [
+        "le", "la", "de", "di", "da", "van", "von", "der", "den", "del", "della", "dos", "du", "st.", "st",
+    ]
+
+    /// "Ursula K. Le Guin" → "Le Guin, Ursula K." — last-token inversion that absorbs known
+    /// surname prefixes (calibre's default method), e.g. "John von Neumann" → "von Neumann, John".
     static func makeAuthorSort(_ name: String) -> String {
         let parts = name.split(separator: " ")
-        guard parts.count > 1, let last = parts.last else { return name }
-        return "\(last), \(parts.dropLast().joined(separator: " "))"
+        guard parts.count > 1 else { return name }
+        var surnameStart = parts.count - 1
+        while surnameStart > 0, surnamePrefixes.contains(parts[surnameStart - 1].lowercased()) {
+            surnameStart -= 1
+        }
+        let surname = parts[surnameStart...].joined(separator: " ")
+        let given = parts[..<surnameStart].joined(separator: " ")
+        return given.isEmpty ? surname : "\(surname), \(given)"
+    }
+}
+
+/// Parses META-INF/encryption.xml and determines whether every EncryptionMethod is a
+/// font-obfuscation algorithm. Fails closed: unparseable content or zero EncryptionMethod
+/// elements are treated as DRM-protected.
+enum EncryptionXMLParser {
+    static let fontObfuscationAlgorithms: Set<String> = [
+        "http://www.idpf.org/2008/embedding",
+        "http://ns.adobe.com/pdf/enc#RC",
+    ]
+
+    static func isFontObfuscationOnly(_ data: Data) -> Bool {
+        final class Delegate: NSObject, XMLParserDelegate {
+            var algorithms: [String] = []
+            func parser(_ parser: XMLParser, didStartElement name: String, namespaceURI: String?,
+                        qualifiedName: String?, attributes: [String: String] = [:]) {
+                if name == "EncryptionMethod", let algorithm = attributes["Algorithm"] {
+                    algorithms.append(algorithm)
+                }
+            }
+        }
+        let parser = XMLParser(data: data)
+        let delegate = Delegate()
+        parser.delegate = delegate
+        guard parser.parse(), !delegate.algorithms.isEmpty else { return false }
+        return delegate.algorithms.allSatisfy { fontObfuscationAlgorithms.contains($0) }
     }
 }
 
