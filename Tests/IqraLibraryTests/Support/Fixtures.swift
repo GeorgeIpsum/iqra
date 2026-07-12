@@ -1,0 +1,79 @@
+import Foundation
+import CoreGraphics
+import ImageIO
+import UniformTypeIdentifiers
+import ZIPFoundation
+
+enum Fixtures {
+    /// A 4x4 red JPEG rendered with CoreGraphics — no binary fixture files.
+    static func tinyJPEG() -> Data {
+        let ctx = CGContext(data: nil, width: 4, height: 4, bitsPerComponent: 8, bytesPerRow: 0,
+                            space: CGColorSpaceCreateDeviceRGB(),
+                            bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)!
+        ctx.setFillColor(CGColor(red: 1, green: 0, blue: 0, alpha: 1))
+        ctx.fill(CGRect(x: 0, y: 0, width: 4, height: 4))
+        let image = ctx.makeImage()!
+        let out = NSMutableData()
+        let dest = CGImageDestinationCreateWithData(out, UTType.jpeg.identifier as CFString, 1, nil)!
+        CGImageDestinationAddImage(dest, image, nil)
+        CGImageDestinationFinalize(dest)
+        return out as Data
+    }
+
+    static func makeEPUB(title: String, author: String, isbn: String?, language: String = "en",
+                         coverJPEG: Data? = nil, encrypted: Bool = false, dir: URL) throws -> URL {
+        let url = dir.appendingPathComponent(UUID().uuidString + ".epub")
+        let archive = try Archive(url: url, accessMode: .create, pathEncoding: nil)
+        func add(_ name: String, _ text: String) throws {
+            let data = Data(text.utf8)
+            try archive.addEntry(with: name, type: .file, uncompressedSize: Int64(data.count),
+                                 provider: { p, s in data.subdata(in: Int(p)..<Int(p) + s) })
+        }
+        try add("mimetype", "application/epub+zip")
+        try add("META-INF/container.xml", """
+            <?xml version="1.0"?>
+            <container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+              <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+            </container>
+            """)
+        if encrypted {
+            try add("META-INF/encryption.xml", """
+                <encryption xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+                  <EncryptedData xmlns="http://www.w3.org/2001/04/xmlenc#">
+                    <EncryptionMethod Algorithm="http://www.w3.org/2001/04/xmlenc#aes128-cbc"/>
+                  </EncryptedData>
+                </encryption>
+                """)
+        }
+        let coverManifest = coverJPEG != nil
+            ? #"<item id="cover-image" href="cover.jpg" media-type="image/jpeg"/>"# : ""
+        let coverMeta = coverJPEG != nil ? #"<meta name="cover" content="cover-image"/>"# : ""
+        let isbnXML = isbn.map { #"<dc:identifier opf:scheme="ISBN">\#($0)</dc:identifier>"# } ?? ""
+        try add("OEBPS/content.opf", """
+            <?xml version="1.0"?>
+            <package xmlns="http://www.idpf.org/2007/opf" xmlns:opf="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid">
+              <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+                <dc:title>\(title)</dc:title>
+                <dc:creator>\(author)</dc:creator>
+                <dc:language>\(language)</dc:language>
+                <dc:identifier id="uid">urn:uuid:\(UUID().uuidString)</dc:identifier>
+                \(isbnXML)
+                <dc:description>Fixture description.</dc:description>
+                \(coverMeta)
+              </metadata>
+              <manifest>
+                <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+                \(coverManifest)
+              </manifest>
+              <spine><itemref idref="ch1"/></spine>
+            </package>
+            """)
+        try add("OEBPS/ch1.xhtml", "<html><body><p>Hello.</p></body></html>")
+        if let coverJPEG {
+            try archive.addEntry(with: "OEBPS/cover.jpg", type: .file,
+                                 uncompressedSize: Int64(coverJPEG.count),
+                                 provider: { p, s in coverJPEG.subdata(in: Int(p)..<Int(p) + s) })
+        }
+        return url
+    }
+}
