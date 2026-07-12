@@ -23,6 +23,7 @@ targets:
         INFOPLIST_KEY_CFBundleDisplayName: iqra
         ENABLE_HARDENED_RUNTIME: YES
         ENABLE_APP_SANDBOX: YES
+        ENABLE_USER_SELECTED_FILES: readonly
         INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace: NO
       configs:
         Debug:
