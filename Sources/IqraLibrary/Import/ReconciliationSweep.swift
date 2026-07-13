@@ -68,43 +68,43 @@ public enum ReconciliationSweep {
                 // already catalogued under another book means this orphan is a leftover from
                 // a retried import, not a new book. Skip it (files stay on disk untouched).
                 let hashes = sidecar.formats.map(\.contentHash)
-                let duplicate = try dbm.writer.read { db in
-                    try Int.fetchOne(db, sql: """
-                        SELECT count(*) FROM format f JOIN book b ON b.id = f.bookId
-                        WHERE f.contentHash IN (\(hashes.map { _ in "?" }.joined(separator: ",")))
-                          AND f.deleted = 0 AND b.deleted = 0
-                        """, arguments: StatementArguments(hashes))! > 0
-                }
-                if duplicate {
-                    report.orphansSkippedAsDuplicates += 1
-                    continue
-                }
                 do {
-                    try store.insertBook(metadata: sidecar.metadata, formatType: firstFormat.formatType,
-                                         originalFileName: firstFormat.originalFileName,
-                                         byteSize: firstFormat.byteSize, contentHash: firstFormat.contentHash,
-                                         bookID: sidecar.bookID, formatID: firstFormat.formatID)
-                    // A multi-format book can crash into orphanhood too (ImportPipeline.attach
-                    // appends to the sidecar's formats array) -- adopt every remaining format
-                    // so none are silently dropped, mirroring the DB portion of attach().
-                    for extra in sidecar.formats.dropFirst() {
-                        let file = folder.appendingPathComponent(
-                            "\(extra.formatID.uuidString).\(extra.formatType.fileExtension)")
-                        let present = fm.fileExists(atPath: file.path)
-                        try dbm.writer.write { db in
-                            let seq = try dbm.nextApplySequence(db)
-                            try FormatRecord(id: extra.formatID.uuidString, bookId: sidecar.bookID.uuidString,
-                                             formatType: extra.formatType.rawValue,
-                                             originalFileName: extra.originalFileName, byteSize: extra.byteSize,
-                                             contentHash: extra.contentHash, addedAt: Date(),
-                                             applySeq: seq, deleted: false).insert(db)
-                            try db.execute(sql: """
-                                INSERT INTO format_local (formatId, present, localVerifiedAt, missing)
-                                VALUES (?, ?, ?, ?)
-                                """, arguments: [extra.formatID.uuidString, present, present ? Date() : nil, !present])
-                        }
+                    let duplicate = try dbm.writer.read { db in
+                        try Int.fetchOne(db, sql: """
+                            SELECT count(*) FROM format f JOIN book b ON b.id = f.bookId
+                            WHERE f.contentHash IN (\(hashes.map { _ in "?" }.joined(separator: ",")))
+                              AND f.deleted = 0 AND b.deleted = 0
+                            """, arguments: StatementArguments(hashes))! > 0
                     }
-                    report.orphansAdopted += 1
+                    if duplicate {
+                        report.orphansSkippedAsDuplicates += 1
+                    } else {
+                        try store.insertBook(metadata: sidecar.metadata, formatType: firstFormat.formatType,
+                                             originalFileName: firstFormat.originalFileName,
+                                             byteSize: firstFormat.byteSize, contentHash: firstFormat.contentHash,
+                                             bookID: sidecar.bookID, formatID: firstFormat.formatID)
+                        // A multi-format book can crash into orphanhood too (ImportPipeline.attach
+                        // appends to the sidecar's formats array) -- adopt every remaining format
+                        // so none are silently dropped, mirroring the DB portion of attach().
+                        for extra in sidecar.formats.dropFirst() {
+                            let file = folder.appendingPathComponent(
+                                "\(extra.formatID.uuidString).\(extra.formatType.fileExtension)")
+                            let present = fm.fileExists(atPath: file.path)
+                            try dbm.writer.write { db in
+                                let seq = try dbm.nextApplySequence(db)
+                                try FormatRecord(id: extra.formatID.uuidString, bookId: sidecar.bookID.uuidString,
+                                                 formatType: extra.formatType.rawValue,
+                                                 originalFileName: extra.originalFileName, byteSize: extra.byteSize,
+                                                 contentHash: extra.contentHash, addedAt: Date(),
+                                                 applySeq: seq, deleted: false).insert(db)
+                                try db.execute(sql: """
+                                    INSERT INTO format_local (formatId, present, localVerifiedAt, missing)
+                                    VALUES (?, ?, ?, ?)
+                                    """, arguments: [extra.formatID.uuidString, present, present ? Date() : nil, !present])
+                            }
+                        }
+                        report.orphansAdopted += 1
+                    }
                 } catch {
                     report.failures += 1
                 }
