@@ -258,25 +258,64 @@ final class EPUBNavigatorTests: XCTestCase {
         await fulfillment(of: [jumped], timeout: 30)
 
         // A single goTo can emit more than one relocate as the renderer settles (see the
-        // other tests' `assertForOverFulfill = false`). Anchor "post-recovery" on the
-        // reloaded page's own "loaded" post rather than "the next relocate we happen to
-        // see" — a stray pre-reload relocate arriving late would otherwise still carry
+        // other tests' `assertForOverFulfill = false`) — settling relocates from the
+        // goTo(0.8) above can still be trickling in for a bit. Anchor "post-recovery" on
+        // the reloaded page's own "loaded" post rather than "the next relocate we happen
+        // to see" — a stray pre-reload relocate arriving late would otherwise still carry
         // the deep CFI and let a buggy recovery path pass by accident. bridge.js always
         // posts "loaded" before its own "relocate" within a single start() run, so once
         // this second "loaded" fires, any relocate we see afterward is genuinely from the
         // reloaded page's recovery navigation, not a leftover from before the crash.
+        //
+        // Snapshot `recorder.locators.count` from *inside* the "loaded" callback itself —
+        // i.e. at the instant the reloaded page's "loaded" fires — rather than earlier
+        // (e.g. right as the crash is triggered). Capturing it earlier would be too eager:
+        // goTo(0.8)'s settling relocates can still be arriving right up until the reload
+        // actually swaps in the new page, so a count taken before that point could still
+        // count late pre-crash stragglers as "post-recovery" (confirmed: an earlier version
+        // of this fix that snapshotted the count before triggering the reload still passed
+        // even with the ready-handler's CFI precedence deliberately flipped back — a false
+        // pass caused by exactly this false-positive). Capturing it here, synchronously in
+        // the same callback that fulfills `reloaded`, is safe: no further pre-crash relocate
+        // can land after this instant (this run's `loaded` has already posted), yet nothing
+        // async has happened yet either, so it can't itself race.
+        var preRecoveryLocatorCount = 0
         let reloaded = expectation(description: "reloaded")
-        recorder.onLoad = { reloaded.fulfill() }
+        recorder.onLoad = {
+            preRecoveryLocatorCount = recorder.locators.count
+            reloaded.fulfill()
+        }
         nav.webViewWebContentProcessDidTerminate(nav.webView)
         await fulfillment(of: [reloaded], timeout: 30)
 
         // simulate WebContent process death: the page reloads, bridge.js posts "ready"
         // again, and the ready handler must re-send lastLocator's CFI (the deep position
         // just reached), not initialLocator's (the frozen start-of-book position).
+        //
+        // Race: a recovery relocate can land in the scheduling gap between the
+        // `await fulfillment(of: [reloaded], ...)` above returning and the `onRelocate`
+        // assignment below being reached — the WKWebView message dispatch isn't
+        // synchronized with this test's suspension/resumption. If that happens, the
+        // relocate fires whatever `onRelocate` closure was installed *before* this point
+        // (the stale "jumped" one from the goTo(0.8) step above), which silently
+        // swallows it (its expectation already fulfilled, `assertForOverFulfill = false`)
+        // and `recovered` would never fire, timing the test out. Close the gap by
+        // checking synchronously — everything here is @MainActor, so this
+        // check-then-install has no `await` in between and can't itself race — whether a
+        // qualifying relocate already landed in `recorder.locators` since
+        // `preRecoveryLocatorCount`, fulfilling immediately if so, and only installing the
+        // listener otherwise.
         let recovered = expectation(description: "recovered")
         recovered.assertForOverFulfill = false
-        recorder.onRelocate = {
-            if (recorder.locators.last?.totalProgression ?? 0) > 0.5 { recovered.fulfill() }
+        func isPostRecoveryDeepRelocate() -> Bool {
+            recorder.locators[preRecoveryLocatorCount...].contains { $0.totalProgression > 0.5 }
+        }
+        if isPostRecoveryDeepRelocate() {
+            recovered.fulfill()
+        } else {
+            recorder.onRelocate = {
+                if isPostRecoveryDeepRelocate() { recovered.fulfill() }
+            }
         }
         await fulfillment(of: [recovered], timeout: 30)
 
