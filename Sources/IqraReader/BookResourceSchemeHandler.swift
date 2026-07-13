@@ -53,9 +53,9 @@ public struct BookResourceResolver: Sendable {
             guard let data = try? Data(contentsOf: bookFileURL) else { return nil }
             return Response(data: data, mimeType: "application/epub+zip")
         case "index.html":
-            return bundled("Resources/reader.html", mime: "text/html")
+            return bundled("ReaderAssets/reader.html", mime: "text/html")
         case "bridge.js":
-            return bundled("Resources/bridge.js", mime: "text/javascript")
+            return bundled("ReaderAssets/bridge.js", mime: "text/javascript")
         default:
             guard path.hasPrefix("vendor/foliate-js/") else { return nil }
             let mime = path.hasSuffix(".js") ? "text/javascript" : "application/octet-stream"
@@ -65,11 +65,23 @@ public struct BookResourceResolver: Sendable {
     }
 
     private func bundled(_ relativePath: String, mime: String) -> Response? {
-        // .copy resources preserve directory structure. Since bundle.resourceURL points to
-        // Resources/ subdirectory, go up one level to reach the bundle root for Vendor/.
+        // .copy resources (Vendor/, ReaderAssets/) land as top-level children of the bundle's
+        // *resource directory* — bundle.resourceURL, which NSBundle already resolves correctly
+        // per platform bundle layout: the flat layout SwiftPM/iOS use (resourceURL == the
+        // bundle's own root) and the Contents/Resources-wrapped layout Xcode uses for native
+        // macOS app targets (resourceURL == .../Contents/Resources) both verified empirically.
+        //
+        // Do NOT special-case this by going "up a level" from resourceURL, and do NOT use
+        // bundle.bundleURL instead: an earlier version of this code did the former to
+        // compensate for NSBundle's legacy-bundle sniffing, which special-cases a top-level
+        // child literally named "resources" (any case) as a classic Mac "Resources/" folder
+        // and redirects a flat bundle's resourceURL to point inside it. That same sniffing is
+        // what made codesign misidentify the bundle as an old-style bundle lacking the expected
+        // executable, failing ad-hoc signing on iOS/iOS Simulator with "bundle format
+        // unrecognized, invalid, or unsuitable" (reproduced empirically) — hence the resource
+        // directory is named ReaderAssets, not Resources, and resourceURL is used unmodified.
         guard let resourceURL = bundle.resourceURL else { return nil }
-        let bundleRoot = resourceURL.deletingLastPathComponent()
-        let fileURL = bundleRoot.appendingPathComponent(relativePath)
+        let fileURL = resourceURL.appendingPathComponent(relativePath)
         guard let data = try? Data(contentsOf: fileURL) else { return nil }
         return Response(data: data, mimeType: mime)
     }

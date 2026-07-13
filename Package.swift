@@ -28,7 +28,7 @@ let package = Package(
             dependencies: ["IqraCore"],
             resources: [
                 .copy("Vendor"),
-                .copy("Resources"),
+                .copy("ReaderAssets"),
             ]
         ),
         .testTarget(name: "IqraCoreTests", dependencies: ["IqraCore"]),

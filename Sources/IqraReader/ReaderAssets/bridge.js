@@ -1,4 +1,4 @@
-// Sources/IqraReader/Resources/bridge.js
+// Sources/IqraReader/ReaderAssets/bridge.js
 // The ONLY channel between book content and the app (spec: Thorium's preload pattern).
 // Runs as a module in the reader page; talks to Swift via webkit.messageHandlers.iqra.
 import './vendor/foliate-js/view.js'
