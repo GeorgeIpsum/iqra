@@ -115,17 +115,32 @@ final class EPUBNavigatorAnnotationTests: XCTestCase {
             """) as? String
         let annotationCFI = try XCTUnwrap(cfi)
 
+        // The paginator creates a fresh Overlayer for every rendered section regardless of
+        // whether any annotation is ever added (see paginator.js's unconditional
+        // `create-overlayer` dispatch), so merely checking that `overlayer.hitTest` exists is
+        // tautological. Instead, snapshot the overlayer's actual drawn SVG children
+        // (Overlayer#add in overlayer.js appends one <g> per drawn annotation to
+        // `overlayer.element`) before calling addAnnotation, then poll until that count
+        // increases by exactly one -- proving our call really drew a highlight.
+        let initialOverlayChildCount = try await nav.webView.evaluateJavaScript("""
+            document.querySelector('foliate-view').renderer.getContents()[0].overlayer.element.childElementCount
+            """) as? Int
+        let beforeCount = try XCTUnwrap(initialOverlayChildCount)
+
         nav.addAnnotation(Annotation(id: UUID(), kind: .highlight,
                                      locator: Locator(spineIndex: 0, cfi: annotationCFI, totalProgression: 0.1),
                                      color: .yellow, note: nil, createdAt: Date(), modifiedAt: Date()))
 
-        // The overlay must exist: poll the paginator's overlayer for the drawn key.
-        try await Task.sleep(nanoseconds: 400_000_000)
-        let drawn = try await nav.webView.evaluateJavaScript("""
-            document.querySelector('foliate-view').renderer.getContents()[0].overlayer.hitTest
-              ? true : false
-            """) as? Bool
-        XCTAssertEqual(drawn, true) // overlayer present on the section
+        var afterCount = beforeCount
+        for _ in 0..<100 {
+            afterCount = try await nav.webView.evaluateJavaScript("""
+                document.querySelector('foliate-view').renderer.getContents()[0].overlayer.element.childElementCount
+                """) as? Int ?? beforeCount
+            if afterCount == beforeCount + 1 { break }
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        XCTAssertEqual(afterCount, beforeCount + 1,
+                        "addAnnotation should draw exactly one new SVG element into the overlayer")
 
         // Simulate a tap on the annotation via the view's showAnnotation path.
         let tapped = expectation(description: "tapped"); tapped.assertForOverFulfill = false
