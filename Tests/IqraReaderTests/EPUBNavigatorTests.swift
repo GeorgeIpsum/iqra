@@ -50,6 +50,71 @@ private func makeFixtureEPUB(title: String, paragraphs: Int, dir: URL) throws ->
     return url
 }
 
+/// Same skeleton as `makeFixtureEPUB`, but ch1's body carries a hostile payload: an inline
+/// `<script>` and an `<img onerror=...>`, both of which try to (a) mark the page's *own*
+/// global scope as pwned and (b) forge a native "relocate" message with an out-of-range
+/// spineIndex/totalProgression/cfi. foliate-js deliberately does not strip inline scripts from
+/// chapter content (see the "TODO: replace inline scripts? probably not worth the trouble"
+/// comment in the vendored epub.js) and renders each section inside a sandboxed
+/// `<iframe sandbox="allow-same-origin allow-scripts">` (paginator.js) — so this is exactly the
+/// content a malicious/compromised EPUB could ship. The claim under test is that book content
+/// scripts can never influence the app: the CSP (script-src 'self', inherited by the blob:
+/// iframe) should block the inline script/handler outright, and even if it ran, the
+/// main-frame-only guard in `EPUBNavigator`'s `MessageProxy` should reject any message that
+/// didn't come from the top-level bridge page.
+private func makeHostileFixtureEPUB(title: String, paragraphs: Int, dir: URL) throws -> URL {
+    let url = dir.appendingPathComponent(UUID().uuidString + ".epub")
+    let archive = try Archive(url: url, accessMode: .create, pathEncoding: nil)
+    func add(_ name: String, _ text: String) throws {
+        let data = Data(text.utf8)
+        try archive.addEntry(with: name, type: .file, uncompressedSize: Int64(data.count),
+                             provider: { p, s in data.subdata(in: Int(p)..<Int(p) + s) })
+    }
+    try add("mimetype", "application/epub+zip")
+    try add("META-INF/container.xml", """
+        <?xml version="1.0"?>
+        <container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+          <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+        </container>
+        """)
+    try add("OEBPS/content.opf", """
+        <?xml version="1.0"?>
+        <package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid">
+          <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+            <dc:title>\(title)</dc:title>
+            <dc:language>en</dc:language>
+            <dc:identifier id="uid">urn:uuid:\(UUID().uuidString)</dc:identifier>
+          </metadata>
+          <manifest>
+            <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+            <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+            <item id="ch2" href="ch2.xhtml" media-type="application/xhtml+xml"/>
+          </manifest>
+          <spine><itemref idref="ch1"/><itemref idref="ch2"/></spine>
+        </package>
+        """)
+    try add("OEBPS/nav.xhtml", """
+        <html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+        <body><nav epub:type="toc"><ol>
+          <li><a href="ch1.xhtml">One</a></li><li><a href="ch2.xhtml">Two</a></li>
+        </ol></nav></body></html>
+        """)
+    let body = (0..<paragraphs).map { "<p>Paragraph \($0) of steady prose for pagination.</p>" }
+        .joined()
+    let forgedPostMessage = """
+        window.__pwned = true; \
+        window.webkit?.messageHandlers?.iqra?.postMessage({type:'relocate',spineIndex:99,totalProgression:0.99,cfi:'epubcfi(/6/999)'})
+        """
+    try add("OEBPS/ch1.xhtml", """
+        <html><body><h1>One</h1>
+        <script>\(forgedPostMessage)</script>
+        <img src="x" onerror="\(forgedPostMessage)">
+        \(body)</body></html>
+        """)
+    try add("OEBPS/ch2.xhtml", "<html><body><h1>Two</h1>\(body)</body></html>")
+    return url
+}
+
 @MainActor
 private final class DelegateRecorder: NavigatorDelegate {
     var loaded: (title: String?, toc: [TOCItem])?
@@ -218,5 +283,55 @@ final class EPUBNavigatorTests: XCTestCase {
         let restoredLocator = try XCTUnwrap(recorder.locators.last)
         XCTAssertGreaterThan(restoredLocator.totalProgression, 0.5,
                              "crash recovery must restore the freshest position, not the frozen initialLocator")
+    }
+
+    /// Security regression test for the claim "publisher scripts never execute [against the
+    /// app]": opens a hostile EPUB (see `makeHostileFixtureEPUB`) whose chapter content carries
+    /// an inline `<script>` and an `<img onerror>` that both try to mark the page as pwned and
+    /// forge a native relocate message with an out-of-range spineIndex/totalProgression/cfi.
+    /// Two independent layers are expected to defeat this: the CSP (script-src 'self', which
+    /// the blob: content iframe inherits from the top-level bridge page) should block the
+    /// inline script/handler from running at all, and even if it ran, `EPUBNavigator`'s
+    /// `MessageProxy` only forwards messages whose `frameInfo.isMainFrame` is true — a content
+    /// iframe's postMessage call would be dropped before reaching the delegate.
+    @MainActor
+    func testHostileEPUBCannotEscapeSandboxOrForgeRelocate() async throws {
+        let epub = try makeHostileFixtureEPUB(title: "Hostile", paragraphs: 60, dir: dir)
+        let nav = EPUBNavigator(bookID: UUID(), bookFileURL: epub,
+                                initialLocator: nil, settings: .default)
+        nav.webView.frame = CGRect(x: 0, y: 0, width: 800, height: 600)
+        let recorder = DelegateRecorder()
+        nav.delegate = recorder
+
+        let loadExpectation = expectation(description: "loaded")
+        recorder.onLoad = { loadExpectation.fulfill() }
+        let relocateExpectation = expectation(description: "relocated")
+        relocateExpectation.assertForOverFulfill = false
+        recorder.onRelocate = { relocateExpectation.fulfill() }
+
+        nav.start()
+        await fulfillment(of: [loadExpectation, relocateExpectation], timeout: 30)
+
+        // The hostile chapter has already rendered into its content iframe by the time
+        // "loaded"/the first "relocate" fired. Give any script/onerror handler that did run a
+        // generous extra window to attempt its forged postMessage before asserting.
+        try await Task.sleep(nanoseconds: 3_000_000_000)
+
+        // (a) The script (if it ran at all) ran inside a content iframe's own window, not the
+        // top-level bridge page's — assert the bridge page's global scope was never polluted.
+        let pwned = try? await nav.webView.evaluateJavaScript("window.__pwned === true")
+        XCTAssertNotEqual(pwned as? Bool, true,
+            "hostile chapter content must never be able to set state visible on the " +
+            "top-level bridge page's window")
+
+        // (b) The forged relocate must never reach the delegate: neither the CSP-blocked
+        // script/handler nor (as defense in depth) the main-frame-only message guard should
+        // let it through.
+        XCTAssertFalse(recorder.locators.contains { $0.spineIndex == 99 },
+            "forged spineIndex from chapter content must never reach the delegate")
+        XCTAssertFalse(recorder.locators.contains { abs($0.totalProgression - 0.99) < 0.0001 },
+            "forged totalProgression from chapter content must never reach the delegate")
+        XCTAssertFalse(recorder.locators.contains { $0.cfi == "epubcfi(/6/999)" },
+            "forged CFI from chapter content must never reach the delegate")
     }
 }
