@@ -1,10 +1,6 @@
 import Foundation
 import WebKit
 
-public extension Bundle {
-    static let readerModule = Bundle.module
-}
-
 public enum BookScheme {
     public static let scheme = "iqra-book"
     public static func pageURL(bookID: UUID) -> URL {
@@ -39,8 +35,9 @@ public struct BookResourceResolver: Sendable {
     let bookFileURL: URL
     let bundle: Bundle
 
-    public init(bookID: UUID, bookFileURL: URL, bundle: Bundle = .readerModule) {
-        self.bookID = bookID; self.bookFileURL = bookFileURL; self.bundle = bundle
+    public init(bookID: UUID, bookFileURL: URL, bundle: Bundle? = nil) {
+        self.bookID = bookID; self.bookFileURL = bookFileURL
+        self.bundle = bundle ?? .module
     }
 
     public func response(for url: URL) -> Response? {
