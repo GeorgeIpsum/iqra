@@ -62,30 +62,40 @@ final class LibraryViewModel {
             lastError = "The library isn't ready yet. Please try again in a moment."
             return
         }
-        var batchErrors: [String] = []
-        for url in urls {
-            let scoped = url.startAccessingSecurityScopedResource()
-            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-            do {
-                #if os(macOS)
-                let bookmark = try? url.bookmarkData(options: .withSecurityScope,
-                                                     includingResourceValuesForKeys: nil, relativeTo: nil)
-                #else
-                let bookmark = try? url.bookmarkData()
-                #endif
-                let result = try pipeline.importFile(at: url, sourceBookmark: bookmark)
-                if case let .needsUserDecision(existingBookID) = result {
-                    pendingIdentifierMatches.append((url, existingBookID))
+        // Import work is CPU+IO heavy (copy, hash, unzip): run the batch off the MainActor.
+        // The closure returns its results instead of mutating captured vars — mutating a
+        // captured `var` from inside a `@Sendable` closure trips strict-concurrency capture
+        // diagnostics, since the compiler can't see that the batch runs sequentially.
+        let (batchErrors, conflicts): ([String], [(sourceURL: URL, existingBookID: UUID)]) =
+            await Task.detached(priority: .userInitiated) {
+                var batchErrors: [String] = []
+                var conflicts: [(sourceURL: URL, existingBookID: UUID)] = []
+                for url in urls {
+                    let scoped = url.startAccessingSecurityScopedResource()
+                    defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+                    #if os(macOS)
+                    let bookmark = try? url.bookmarkData(options: .withSecurityScope,
+                                                         includingResourceValuesForKeys: nil, relativeTo: nil)
+                    #else
+                    let bookmark = try? url.bookmarkData()
+                    #endif
+                    do {
+                        let result = try pipeline.importFile(at: url, sourceBookmark: bookmark)
+                        if case let .needsUserDecision(existingBookID) = result {
+                            conflicts.append((url, existingBookID))
+                        }
+                    } catch {
+                        batchErrors.append("Import failed for \(url.lastPathComponent): \(error)")
+                    }
                 }
-            } catch {
-                batchErrors.append("Import failed for \(url.lastPathComponent): \(error)")
-            }
-        }
+                return (batchErrors, conflicts)
+            }.value
+        pendingIdentifierMatches.append(contentsOf: conflicts)
         if !batchErrors.isEmpty {
             importErrors.append(contentsOf: batchErrors)
             lastError = importErrors.joined(separator: "\n")
         }
-        quarantined = (try? store.quarantinedItems()) ?? quarantined
+        quarantined = (try? store.recoveryItems()) ?? quarantined
     }
 
     /// Pops and resolves the first queued identifier-match prompt. The alert re-presents

@@ -1,4 +1,5 @@
 import XCTest
+import CryptoKit
 import IqraCore
 import GRDB
 @testable import IqraLibrary
@@ -275,5 +276,17 @@ final class ImportPipelineTests: XCTestCase {
                               arguments: [epub.path])
         }
         XCTAssertEqual(stored, fakeBookmark)
+    }
+
+    func testSha256HexStreamsLargeFilesCorrectly() throws {
+        // 4 MiB of a repeating pattern — larger than the 1 MiB chunk size, exercising
+        // multi-chunk accumulation. Compare against the one-shot digest.
+        var data = Data()
+        let block = Data((0..<1024).map { UInt8($0 % 251) })
+        for _ in 0..<(4 * 1024) { data.append(block) }
+        let url = dir.appendingPathComponent("big.bin")
+        try data.write(to: url)
+        let expected = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        XCTAssertEqual(try sha256Hex(of: url), expected)
     }
 }

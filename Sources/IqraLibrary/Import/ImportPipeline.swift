@@ -16,9 +16,16 @@ public enum IdentifierResolution: Sendable {
     case ask, importAsNewBook, attach(toBook: UUID)
 }
 
+/// Streams the file through SHA-256 in 1 MiB chunks — imports of multi-hundred-MB files
+/// must not materialize the whole file in memory.
 public func sha256Hex(of url: URL) throws -> String {
-    let data = try Data(contentsOf: url) // M1: whole-file read; stream if profiling demands
-    return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    let handle = try FileHandle(forReadingFrom: url)
+    defer { try? handle.close() }
+    var hasher = SHA256()
+    while let chunk = try handle.read(upToCount: 1 << 20), !chunk.isEmpty {
+        hasher.update(data: chunk)
+    }
+    return hasher.finalize().map { String(format: "%02x", $0) }.joined()
 }
 
 public final class ImportPipeline {
@@ -286,3 +293,9 @@ public final class ImportPipeline {
         }
     }
 }
+
+/// Thread-safety contract: ImportPipeline is stateless between calls except the test-only
+/// `failpoint` hook; all shared state lives in GRDB (serialized writer) and the filesystem
+/// (unique staging dirs per import). Callers must not run two imports of the SAME source
+/// path concurrently; the app serializes batches (one Task, sequential loop).
+extension ImportPipeline: @unchecked Sendable {}
