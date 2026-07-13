@@ -196,7 +196,7 @@ final class ReaderViewModel: NavigatorDelegate {
 
     var isCurrentPositionBookmarked: Bool {
         guard let cfi = lastLocator?.cfi else { return false }
-        return bookmarkedAnnotation(at: cfi) != nil
+        return annotations.contains { $0.kind == .bookmark && $0.locator.cfi == cfi }
     }
 
     func toggleBookmarkAtCurrentPosition() {
