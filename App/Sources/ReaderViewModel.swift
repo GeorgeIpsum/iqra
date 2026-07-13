@@ -31,7 +31,15 @@ final class ReaderViewModel: NavigatorDelegate {
     private let readingState: ReadingStateStore
     private let annotationStore: AnnotationStore
     private var lastLocator: Locator?
-    private var observationTask: Task<Void, Never>?
+    // @ObservationIgnored: this is private bookkeeping, not UI state, so it shouldn't be part
+    // of the @Observable tracked-property machinery — and the macro's ObservationTracked
+    // expansion doesn't allow a plain `nonisolated` modifier on a mutable stored property.
+    // nonisolated(unsafe): deinit runs in a nonisolated context, so it can't touch a
+    // MainActor-isolated stored property directly. The only concurrent access this enables is
+    // Task.cancel() from deinit, which is documented as thread-safe; every mutation of the
+    // task itself still happens on the MainActor (in startObservingAnnotations()).
+    @ObservationIgnored
+    private nonisolated(unsafe) var observationTask: Task<Void, Never>?
 
     init?(bookID: UUID, store: LibraryStore, readingState: ReadingStateStore,
           annotationStore: AnnotationStore, paths: LibraryPaths) {
@@ -59,18 +67,30 @@ final class ReaderViewModel: NavigatorDelegate {
 
     // Decode stored AnnotationRecords → reader Annotations, keep the observed list fresh,
     // and (re)push them to the navigator so overlays are drawn/redrawn.
+    //
+    // `self` is captured weakly and re-checked INSIDE the loop body (mirrors
+    // LibraryViewModel.restartObservation()) rather than unwrapped once before it. Unwrapping
+    // once up front would keep a strong reference to `self` alive for the entire lifetime of
+    // the async sequence — which only ends when the DB writer closes or the process exits — so
+    // the ReaderViewModel (and its EPUBNavigator/WKWebView) could never deallocate even after
+    // LibraryViewModel drops its own reference on book switch.
     private func startObservingAnnotations() {
         let observation = annotationStore.observeAnnotations(bookID: bookID, formatID: formatID)
+        let writer = annotationStore.dbm.writer
         observationTask = Task { [weak self] in
-            guard let self else { return }
             do {
-                for try await records in observation.values(in: self.annotationStore.dbm.writer) {
+                for try await records in observation.values(in: writer) {
+                    guard let self else { return }
                     let decoded: [Annotation] = records.compactMap { Self.annotation(from: $0) }
                     self.annotations = decoded
                     self.pushAnnotationsToReader(decoded)
                 }
             } catch { /* db closed / cancelled */ }
         }
+    }
+
+    deinit {
+        observationTask?.cancel()
     }
 
     private func pushAnnotationsToReader(_ annotations: [Annotation]) {
@@ -160,14 +180,28 @@ final class ReaderViewModel: NavigatorDelegate {
 
     // MARK: Bookmarks
 
+    // Decide existence against the DB directly rather than the in-memory `annotations` array:
+    // that array only refreshes via the async `observeAnnotations` round-trip, so two rapid
+    // (synchronous, back-to-back) toggle calls would both read the same pre-toggle snapshot
+    // and both create a new bookmark at the same CFI. `annotationStore.annotations` does a
+    // synchronous read through the same `DatabaseWriter` used to persist, so it is guaranteed
+    // to observe a write that already returned — making the create/delete decision (and thus
+    // idempotency by CFI) DB-true instead of cache-true. Reusing this existing store method
+    // (rather than adding a new boolean-only `bookmarkExists`) also hands back the persisted
+    // annotation itself, which the delete path needs anyway.
+    private func bookmarkedAnnotation(at cfi: String) -> Annotation? {
+        let fresh = (try? annotationStore.annotations(bookID: bookID, formatID: formatID)) ?? []
+        return fresh.compactMap(Self.annotation(from:)).first { $0.kind == .bookmark && $0.locator.cfi == cfi }
+    }
+
     var isCurrentPositionBookmarked: Bool {
         guard let cfi = lastLocator?.cfi else { return false }
-        return annotations.contains { $0.kind == .bookmark && $0.locator.cfi == cfi }
+        return bookmarkedAnnotation(at: cfi) != nil
     }
 
     func toggleBookmarkAtCurrentPosition() {
         guard let locator = lastLocator, let cfi = locator.cfi else { return }
-        if let existing = annotations.first(where: { $0.kind == .bookmark && $0.locator.cfi == cfi }) {
+        if let existing = bookmarkedAnnotation(at: cfi) {
             deleteAnnotation(existing)
         } else {
             persist(Annotation(id: UUID(), kind: .bookmark, locator: locator, color: nil,
