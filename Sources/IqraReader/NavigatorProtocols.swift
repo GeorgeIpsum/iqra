@@ -10,11 +10,15 @@ public protocol NavigatorDelegate: AnyObject {
     func navigator(didFail message: String)
     func navigator(didChangeSelection selection: SelectionInfo?)
     func navigator(didTapAnnotation cfi: String)
+    func navigator(didFindSearchHit hit: SearchHit)
+    func navigatorDidFinishSearch()
 }
 
 public extension NavigatorDelegate {
     func navigator(didChangeSelection selection: SelectionInfo?) {}
     func navigator(didTapAnnotation cfi: String) {}
+    func navigator(didFindSearchHit hit: SearchHit) {}
+    func navigatorDidFinishSearch() {}
 }
 
 public struct TOCItem: Codable, Equatable, Sendable {

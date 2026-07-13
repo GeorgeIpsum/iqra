@@ -85,6 +85,13 @@ public final class EPUBNavigator: NSObject {
 
     public func deselect() { call("iqra.deselect()") }
 
+    public func search(query: String) {
+        let opts: [String: Any] = ["query": query]
+        guard !query.isEmpty, let data = try? JSONSerialization.data(withJSONObject: opts) else { return }
+        call("iqra.search(\(String(decoding: data, as: UTF8.self)))")
+    }
+    public func clearSearch() { call("iqra.clearSearch()") }
+
     public func apply(settings: ReaderSettings) {
         self.settings = settings
         if let json = try? String(decoding: JSONEncoder().encode(settings), as: UTF8.self) {
@@ -165,6 +172,19 @@ public final class EPUBNavigator: NSObject {
             delegate?.navigator(didChangeSelection: nil)
         case "annotationTapped":
             if let value = dict["value"] as? String { delegate?.navigator(didTapAnnotation: value) }
+        case "searchHit":
+            guard let cfi = dict["cfi"] as? String else { return }
+            let ex = dict["excerpt"] as? [String: Any]
+            delegate?.navigator(didFindSearchHit: SearchHit(
+                cfi: cfi,
+                excerptPre: ex?["pre"] as? String ?? "",
+                excerptMatch: ex?["match"] as? String ?? "",
+                excerptPost: ex?["post"] as? String ?? "",
+                sectionLabel: dict["label"] as? String))
+        case "searchProgress":
+            break // reserved for a progress UI; ignored in M3
+        case "searchDone":
+            delegate?.navigatorDidFinishSearch()
         default:
             break
         }

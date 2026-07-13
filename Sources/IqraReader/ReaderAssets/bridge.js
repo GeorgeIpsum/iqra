@@ -66,6 +66,7 @@ view.addEventListener('relocate', e => {
 const annotations = new Map()   // cfi -> { value, color, kind }; the page-side mirror of the DB,
                                 // re-drawn per section because foliate overlays die with the iframe.
 let currentIndex = 0
+let searchIter = null
 
 // Grab up to `n` chars of text before/after a range's boundaries for fuzzy re-anchoring.
 const contextText = (range, n = 40) => {
@@ -187,6 +188,20 @@ window.iqra = {
         view.deleteAnnotation({ value: a.cfi })
     },
     deselect() { view.deselect() },
+    async search(opts) {
+        this.clearSearch()
+        searchIter = view.search(opts)   // opts: { query, matchCase, matchDiacritics, matchWholeWords }
+        try {
+            for await (const r of searchIter) {
+                if (r === 'done') { post({ type: 'searchDone' }); break }
+                else if (r.subitems) for (const it of r.subitems)
+                    post({ type: 'searchHit', cfi: it.cfi, excerpt: it.excerpt, label: r.label })
+                else if (r.cfi) post({ type: 'searchHit', cfi: r.cfi, excerpt: r.excerpt, label: null })
+                else if (r.progress != null) post({ type: 'searchProgress', progress: r.progress })
+            }
+        } catch (e) { post({ type: 'error', message: 'search: ' + (e?.message ?? e) }) }
+    },
+    clearSearch() { searchIter?.return?.(); searchIter = null; view.clearSearch() },
 }
 
 post({ type: 'ready' })
