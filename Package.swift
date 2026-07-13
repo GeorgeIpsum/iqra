@@ -7,6 +7,7 @@ let package = Package(
     products: [
         .library(name: "IqraCore", targets: ["IqraCore"]),
         .library(name: "IqraLibrary", targets: ["IqraLibrary"]),
+        .library(name: "IqraReader", targets: ["IqraReader"]),
     ],
     dependencies: [
         .package(url: "https://github.com/groue/GRDB.swift.git", from: "7.0.0"),
@@ -22,7 +23,16 @@ let package = Package(
                 .product(name: "ZIPFoundation", package: "ZIPFoundation"),
             ]
         ),
+        .target(
+            name: "IqraReader",
+            dependencies: ["IqraCore"],
+            resources: [
+                .copy("Vendor"),
+                .copy("Resources"),
+            ]
+        ),
         .testTarget(name: "IqraCoreTests", dependencies: ["IqraCore"]),
         .testTarget(name: "IqraLibraryTests", dependencies: ["IqraLibrary"]),
+        .testTarget(name: "IqraReaderTests", dependencies: ["IqraReader"]),
     ]
 )
