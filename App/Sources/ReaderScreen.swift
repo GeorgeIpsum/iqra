@@ -2,6 +2,11 @@
 import SwiftUI
 import WebKit
 import IqraReader
+#if os(macOS)
+import AppKit
+#else
+import UIKit
+#endif
 
 struct ReaderScreen: View {
     @State var model: ReaderViewModel
@@ -24,10 +29,40 @@ struct ReaderScreen: View {
                     Button("Contents", systemImage: "list.bullet") { showTOC = true }
                         .disabled(model.toc.isEmpty)
                     Button("Appearance", systemImage: "textformat.size") { showAppearance = true }
+                    Button(model.isCurrentPositionBookmarked ? "Bookmarked" : "Bookmark",
+                           systemImage: model.isCurrentPositionBookmarked ? "bookmark.fill" : "bookmark") {
+                        model.toggleBookmarkAtCurrentPosition()
+                    }
                 }
             }
             .popover(isPresented: $showAppearance) { AppearanceControls(model: model) }
             .sheet(isPresented: $showTOC) { TOCList(items: model.toc, model: model) }
+            .overlay(alignment: .topLeading) {
+                if let sel = model.currentSelection {
+                    SelectionColorBar(
+                        onPick: { model.createHighlight(color: $0) },
+                        onCopy: {
+                            #if os(macOS)
+                            NSPasteboard.general.clearContents(); NSPasteboard.general.setString(sel.text, forType: .string)
+                            #else
+                            UIPasteboard.general.string = sel.text
+                            #endif
+                            model.clearSelection()
+                        },
+                        onDismiss: { model.clearSelection() })
+                        // Anchor above the selection; clamp into the view. The rect is in web-view
+                        // coordinates (bridge already mapped iframe→host).
+                        .offset(x: max(8, sel.rect.x), y: max(8, sel.rect.y - 52))
+                        .transition(.opacity)
+                }
+            }
+            .sheet(item: Binding(get: { model.activeAnnotation },
+                                  set: { if $0 == nil { model.dismissActiveAnnotation() } })) { ann in
+                NoteEditor(annotation: ann,
+                           onSave: { model.setNote($0, for: ann) },
+                           onChangeColor: { model.changeColor($0, for: ann) },
+                           onDelete: { model.deleteAnnotation(ann) })
+            }
             .alert("Reader error", isPresented: .init(get: { model.readerError != nil },
                                                       set: { if !$0 { model.readerError = nil } })) {
                 Button("OK") { model.readerError = nil }

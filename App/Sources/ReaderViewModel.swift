@@ -137,6 +137,12 @@ final class ReaderViewModel: NavigatorDelegate {
         activeAnnotation = annotations.first { $0.locator.cfi == cfi }
     }
 
+    /// Clears the active annotation, e.g. when the note editor sheet is dismissed by the
+    /// user (swipe-to-dismiss) rather than through an explicit Save/Cancel/Delete action.
+    /// `activeAnnotation` is `private(set)` so `.sheet(item:)`'s two-way Binding needs this
+    /// VM-owned setter to stay the single source of truth.
+    func dismissActiveAnnotation() { activeAnnotation = nil }
+
     // MARK: Intents
 
     func clearSelection() { currentSelection = nil; navigator.deselect() }
