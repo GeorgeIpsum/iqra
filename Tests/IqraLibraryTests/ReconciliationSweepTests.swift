@@ -217,4 +217,61 @@ final class ReconciliationSweepTests: XCTestCase {
         XCTAssertEqual(row["status"] as String, "failed")
         XCTAssertNotNil(row["message"] as String?)
     }
+
+    func testSweepAdoptsSidecarFormatsForKnownBooks() throws {
+        // attach crash after the sidecar write: sidecar lists a format the DB doesn't know
+        let first = try Fixtures.makeEPUB(title: "Known", author: "A", isbn: "9991112223334", dir: dir)
+        guard case let .imported(bookID) = try pipeline.importFile(at: first) else { return XCTFail() }
+        let second = try Fixtures.makeEPUB(title: "Known Two", author: "A", isbn: "9991112223334", dir: dir)
+        pipeline.failpoint = .afterAttachSidecar
+        XCTAssertThrowsError(try pipeline.importFile(at: second, resolution: .attach(toBook: bookID)))
+        pipeline.failpoint = nil
+        XCTAssertEqual(try store.fetchFormats(bookID: bookID).count, 1) // DB behind sidecar
+
+        let report = try ReconciliationSweep.run(paths: paths, store: store, dbm: dbm)
+        XCTAssertEqual(report.formatsAdoptedForKnownBooks, 1)
+        let formats = try store.fetchFormats(bookID: bookID)
+        XCTAssertEqual(formats.count, 2)
+        // adopted format is present (its file was written before the sidecar)
+        let adopted = formats.first { $0.originalFileName == second.lastPathComponent }
+        XCTAssertNotNil(adopted)
+        // idempotent
+        XCTAssertEqual(try ReconciliationSweep.run(paths: paths, store: store, dbm: dbm)
+            .formatsAdoptedForKnownBooks, 0)
+    }
+
+    func testSweepDeletesStalePartialFiles() throws {
+        let epub = try Fixtures.makeEPUB(title: "P", author: "A", isbn: nil, dir: dir)
+        guard case let .imported(bookID) = try pipeline.importFile(at: epub) else { return XCTFail() }
+        let stale = paths.bookDir(bookID).appendingPathComponent("\(UUID().uuidString).epub.partial")
+        try Data("half".utf8).write(to: stale)
+
+        let report = try ReconciliationSweep.run(paths: paths, store: store, dbm: dbm)
+        XCTAssertEqual(report.partialsDeleted, 1)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: stale.path))
+    }
+
+    func testOrphanAdoptionSkipsDuplicateContentHash() throws {
+        // book already in the DB; an orphan folder re-describes the same bytes under a new bookID
+        let epub = try Fixtures.makeEPUB(title: "Dup", author: "A", isbn: nil, dir: dir)
+        guard case let .imported(bookID) = try pipeline.importFile(at: epub) else { return XCTFail() }
+        let format = try XCTUnwrap(store.fetchFormats(bookID: bookID).first)
+        let orphanID = UUID()
+        let orphanDir = paths.bookDir(orphanID)
+        try FileManager.default.createDirectory(at: orphanDir, withIntermediateDirectories: true)
+        let sidecar = Sidecar(bookID: orphanID,
+                              metadata: ExtractedMetadata(title: "Dup", titleSort: "Dup", language: "en",
+                                                          publisher: nil, bookDescription: nil,
+                                                          contributors: [], identifiers: []),
+                              formats: [.init(formatID: UUID(), formatType: .epub,
+                                              originalFileName: "dup.epub", byteSize: format.byteSize,
+                                              contentHash: format.contentHash)],
+                              applySeq: 0)
+        try Sidecar.write(sidecar, to: orphanDir.appendingPathComponent("metadata.json"))
+
+        let report = try ReconciliationSweep.run(paths: paths, store: store, dbm: dbm)
+        XCTAssertEqual(report.orphansAdopted, 0)
+        XCTAssertEqual(report.orphansSkippedAsDuplicates, 1)
+        XCTAssertEqual(try dbm.writer.read { try Int.fetchOne($0, sql: "SELECT count(*) FROM book")! }, 1)
+    }
 }
