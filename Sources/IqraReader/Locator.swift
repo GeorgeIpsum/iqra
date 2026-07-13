@@ -1,6 +1,6 @@
 import Foundation
 
-public let readerBundle = Bundle.module
+let readerBundle = Bundle.module
 
 /// Composite reading position (spec "Locator model"): the CFI is the precise coordinate,
 /// progression fractions are display/fallback only — never anchors.

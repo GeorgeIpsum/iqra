@@ -1,5 +1,5 @@
 import XCTest
-import IqraReader
+@testable import IqraReader
 
 final class LocatorTests: XCTestCase {
     func testLocatorJSONRoundTrip() throws {
