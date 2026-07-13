@@ -113,12 +113,16 @@ public final class EPUBNavigator: NSObject {
                 .flatMap { try? JSONDecoder().decode([TOCItem].self, from: $0) } ?? []
             delegate?.navigatorDidLoad(title: title, toc: toc)
         case "relocate":
+            // Defense in depth: the renderer (bridge.js) already guards against non-finite
+            // values, but a NaN/Infinity here would fail JSON encoding and poison the
+            // persisted high-water mark, so never trust the message payload blindly.
+            let totalProgression = dict["totalProgression"] as? Double ?? 0
             let locator = Locator(
                 spineIndex: dict["spineIndex"] as? Int ?? 0,
                 spineHref: dict["spineHref"] as? String,
                 cfi: dict["cfi"] as? String,
                 progressionInChapter: dict["progressionInChapter"] as? Double,
-                totalProgression: dict["totalProgression"] as? Double ?? 0,
+                totalProgression: totalProgression.isFinite ? totalProgression : 0,
                 tocLabel: dict["tocLabel"] as? String)
             lastLocator = locator
             delegate?.navigator(didRelocate: locator)

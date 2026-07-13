@@ -161,6 +161,7 @@ final class EPUBNavigatorTests: XCTestCase {
         XCTAssertEqual(recorder.loaded?.toc.map(\.label), ["One", "Two"])
         let locator = try XCTUnwrap(recorder.locators.last)
         XCTAssertNotNil(locator.cfi)
+        XCTAssertTrue(locator.totalProgression.isFinite, "totalProgression must never be NaN/Infinity")
         XCTAssertGreaterThanOrEqual(locator.totalProgression, 0)
         XCTAssertTrue(recorder.errors.isEmpty, "reader errors: \(recorder.errors)")
     }

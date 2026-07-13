@@ -48,14 +48,15 @@ let sectionHrefs = []
 
 view.addEventListener('relocate', e => {
     const { cfi, fraction, tocItem, section } = e.detail
-    const spineIndex = section?.current ?? 0
+    const rawSpineIndex = section?.current
+    const spineIndex = Number.isInteger(rawSpineIndex) && rawSpineIndex >= 0 ? rawSpineIndex : 0
     post({
         type: 'relocate',
         spineIndex,
         spineHref: sectionHrefs[spineIndex] ?? null,
         cfi: cfi ?? null,
         progressionInChapter: null, // section-level fraction is renderer-internal; display-only anyway
-        totalProgression: fraction ?? 0,
+        totalProgression: Number.isFinite(fraction) ? fraction : 0, // foliate-js can emit NaN mid-layout; never post a non-finite number
         tocLabel: tocItem?.label ?? null,
     })
 })
