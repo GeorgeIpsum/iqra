@@ -23,7 +23,7 @@ public struct SweepReport: Equatable, Sendable {
 public enum ReconciliationSweep {
     @discardableResult
     public static func run(paths: LibraryPaths, store: LibraryStore,
-                           dbm: DatabaseManager) throws -> SweepReport {
+                           dbm: DatabaseManager, caches: LibraryPaths.Caches) throws -> SweepReport {
         var report = SweepReport()
         let fm = FileManager.default
 
@@ -104,6 +104,14 @@ public enum ReconciliationSweep {
                             }
                         }
                         report.orphansAdopted += 1
+
+                        // Backfill thumbnails: the crash window fires before ThumbnailPipeline ran,
+                        // so the folder has cover.jpg but Caches has nothing. Best-effort — a
+                        // corrupt cover must not fail the adoption that already committed.
+                        if let coverData = try? Data(contentsOf: folder.appendingPathComponent("cover.jpg")) {
+                            _ = try? ThumbnailPipeline.process(coverData: coverData, bookID: sidecar.bookID,
+                                                               paths: paths, caches: caches)
+                        }
                     }
                 } catch {
                     report.failures += 1

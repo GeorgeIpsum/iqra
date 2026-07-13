@@ -40,7 +40,7 @@ final class LibraryViewModel {
                 ftsURL: appSupport.appendingPathComponent("fts.sqlite"))
             store = LibraryStore(dbm: dbm)
             pipeline = ImportPipeline(store: store, dbm: dbm, paths: paths, caches: caches)
-            try ReconciliationSweep.run(paths: paths, store: store, dbm: dbm)
+            try ReconciliationSweep.run(paths: paths, store: store, dbm: dbm, caches: caches)
             quarantined = try store.quarantinedItems()
             await restartObservation()
             isReady = true
@@ -50,9 +50,11 @@ final class LibraryViewModel {
     }
 
     func coverURL(for bookID: UUID) -> URL? {
-        guard let caches else { return nil }
-        let url = caches.thumbnail(bookID: bookID, size: .grid)
-        return FileManager.default.fileExists(atPath: url.path) ? url : nil
+        guard let caches, let paths else { return nil }
+        let thumb = caches.thumbnail(bookID: bookID, size: .grid)
+        if FileManager.default.fileExists(atPath: thumb.path) { return thumb }
+        let cover = paths.cover(bookID: bookID)
+        return FileManager.default.fileExists(atPath: cover.path) ? cover : nil
     }
 
     func importFiles(_ urls: [URL]) async {
