@@ -6,6 +6,7 @@ import IqraLibrary
 @Observable @MainActor
 final class LibraryViewModel {
     private(set) var books: [BookListItem] = []
+    private(set) var readingState: ReadingStateStore?
     private(set) var quarantined: [ImportItemRecord] = []
     private(set) var isReady = false
     var searchText = "" { didSet { Task { await refreshSearch() } } }
@@ -39,6 +40,7 @@ final class LibraryViewModel {
                 catalogueURL: appSupport.appendingPathComponent("catalogue.sqlite"),
                 ftsURL: appSupport.appendingPathComponent("fts.sqlite"))
             store = LibraryStore(dbm: dbm)
+            readingState = ReadingStateStore(dbm: dbm)
             pipeline = ImportPipeline(store: store, dbm: dbm, paths: paths, caches: caches)
             try ReconciliationSweep.run(paths: paths, store: store, dbm: dbm, caches: caches)
             quarantined = try store.quarantinedItems()
@@ -55,6 +57,12 @@ final class LibraryViewModel {
         if FileManager.default.fileExists(atPath: thumb.path) { return thumb }
         let cover = paths.cover(bookID: bookID)
         return FileManager.default.fileExists(atPath: cover.path) ? cover : nil
+    }
+
+    func readerModel(for bookID: UUID) -> ReaderViewModel? {
+        guard let store, let readingState, let paths else { return nil }
+        return ReaderViewModel(bookID: bookID, store: store,
+                               readingState: readingState, paths: paths)
     }
 
     func importFiles(_ urls: [URL]) async {

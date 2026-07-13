@@ -17,16 +17,28 @@ struct LibraryView: View {
             ScrollView {
                 LazyVGrid(columns: columns, spacing: 20) {
                     ForEach(model.books) { book in
-                        VStack(alignment: .leading, spacing: 6) {
-                            CoverView(url: model.coverURL(for: book.id))
-                            Text(book.title).font(.callout).lineLimit(2)
-                            Text(book.authors).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        NavigationLink(value: book.id) {
+                            VStack(alignment: .leading, spacing: 6) {
+                                CoverView(url: model.coverURL(for: book.id))
+                                Text(book.title).font(.callout).lineLimit(2)
+                                Text(book.authors).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                            }
                         }
+                        .buttonStyle(.plain)
                     }
                 }
                 .padding()
             }
             .navigationTitle("Library")
+            .navigationDestination(for: UUID.self) { bookID in
+                if let reader = model.readerModel(for: bookID) {
+                    ReaderScreen(model: reader)
+                } else {
+                    ContentUnavailableView("Can't open this book",
+                        systemImage: "book.closed",
+                        description: Text("No readable EPUB is available on this device."))
+                }
+            }
             .searchable(text: $model.searchText, prompt: "Title, author, description")
             .toolbar {
                 ToolbarItem {

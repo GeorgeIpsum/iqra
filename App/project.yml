@@ -17,6 +17,8 @@ targets:
         product: IqraLibrary
       - package: Iqra
         product: IqraCore
+      - package: Iqra
+        product: IqraReader
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES
