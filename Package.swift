@@ -33,6 +33,9 @@ let package = Package(
         ),
         .testTarget(name: "IqraCoreTests", dependencies: ["IqraCore"]),
         .testTarget(name: "IqraLibraryTests", dependencies: ["IqraLibrary"]),
-        .testTarget(name: "IqraReaderTests", dependencies: ["IqraReader"]),
+        .testTarget(name: "IqraReaderTests", dependencies: [
+            "IqraReader",
+            .product(name: "ZIPFoundation", package: "ZIPFoundation"),
+        ]),
     ]
 )
