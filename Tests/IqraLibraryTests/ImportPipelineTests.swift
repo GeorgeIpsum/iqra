@@ -1,4 +1,5 @@
 import XCTest
+import CryptoKit
 import IqraCore
 import GRDB
 @testable import IqraLibrary
@@ -264,5 +265,28 @@ final class ImportPipelineTests: XCTestCase {
         let unwrapped = try XCTUnwrap(row)
         XCTAssertEqual(unwrapped["status"] as String, "failed")
         XCTAssertNotNil(unwrapped["message"] as String?)
+    }
+
+    func testSourceBookmarkIsPersistedOnImportItem() throws {
+        let epub = try Fixtures.makeEPUB(title: "BM", author: "A", isbn: nil, dir: dir)
+        let fakeBookmark = Data("bookmark-bytes".utf8)
+        _ = try pipeline.importFile(at: epub, sourceBookmark: fakeBookmark)
+        let stored = try dbm.writer.read { db in
+            try Data.fetchOne(db, sql: "SELECT sourceBookmark FROM import_item WHERE sourceDisplayPath = ?",
+                              arguments: [epub.path])
+        }
+        XCTAssertEqual(stored, fakeBookmark)
+    }
+
+    func testSha256HexStreamsLargeFilesCorrectly() throws {
+        // 4 MiB of a repeating pattern — larger than the 1 MiB chunk size, exercising
+        // multi-chunk accumulation. Compare against the one-shot digest.
+        var data = Data()
+        let block = Data((0..<1024).map { UInt8($0 % 251) })
+        for _ in 0..<(4 * 1024) { data.append(block) }
+        let url = dir.appendingPathComponent("big.bin")
+        try data.write(to: url)
+        let expected = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        XCTAssertEqual(try sha256Hex(of: url), expected)
     }
 }

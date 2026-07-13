@@ -124,4 +124,15 @@ final class LibraryStoreTests: XCTestCase {
         let items = try store.quarantinedItems()
         XCTAssertEqual(items.map(\.rejection), ["drmProtected"])
     }
+
+    func testRecoveryItemsIncludePendingRows() throws {
+        try dbm.writer.write { db in
+            for (id, status) in [("a", "pending"), ("b", "quarantined"), ("c", "failed"), ("d", "done")] {
+                try ImportItemRecord(id: id, sourceBookmark: nil, sourceDisplayPath: "/x/\(id).epub",
+                                     status: status, rejection: nil, message: nil, attemptCount: 1,
+                                     createdAt: Date(), updatedAt: Date(), bookId: nil).insert(db)
+            }
+        }
+        XCTAssertEqual(Set(try store.recoveryItems().map(\.id)), ["a", "b", "c"])
+    }
 }

@@ -16,15 +16,16 @@ before making structural decisions. Key locked decisions:
 
 - SwiftUI multiplatform app over three local Swift packages: IqraCore
   (shared models/protocols), IqraLibrary (GRDB catalogue + import
-  pipeline), IqraReader (navigators: foliate-js-in-WKWebView for
-  EPUB/MOBI, PDFKit for PDF, native pager for CBZ/CBR)
+  pipeline), IqraReader (navigators: EPUB shipped via foliate-js in a
+  WKWebView, vendored at pin `78914ae` under `Sources/IqraReader/Vendor/`;
+  PDFKit for PDF and a native pager for CBZ/CBR still pending, M4)
 - GRDB/SQLite persistence, records shaped for CloudKit (CKSyncEngine
   later); managed copy-on-import library folder; DRM-free formats only
 - Adversarial design-review transcripts are in `.lil-bro/` (gitignored)
 
 ## Commands
 
-- `swift test` — run all package tests (IqraCore, IqraLibrary); this is the primary gate
+- `swift test` — run all package tests (IqraCore, IqraLibrary, IqraReader); this is the primary gate
 - `swift test --filter <TestClassName>` — run one test class
 - `cd App && xcodegen generate` — regenerate the Xcode project (project.yml is the source of truth; iqra.xcodeproj is gitignored)
 - `xcodebuild -project App/iqra.xcodeproj -scheme iqra -destination 'platform=macOS' build` — build the app

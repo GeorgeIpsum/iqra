@@ -26,7 +26,7 @@ final class ReconciliationSweepTests: XCTestCase {
         pipeline.failpoint = .afterStaging
         XCTAssertThrowsError(try pipeline.importFile(at: epub))
 
-        let report = try ReconciliationSweep.run(paths: paths, store: store, dbm: dbm)
+        let report = try ReconciliationSweep.run(paths: paths, store: store, dbm: dbm, caches: caches)
         XCTAssertEqual(report.stagingDeleted, 1)
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: paths.stagingDir.path).count, 0)
     }
@@ -38,7 +38,7 @@ final class ReconciliationSweepTests: XCTestCase {
         XCTAssertThrowsError(try pipeline.importFile(at: epub))
         XCTAssertNil(try dbm.writer.read { try BookRecord.fetchOne($0) })
 
-        let report = try ReconciliationSweep.run(paths: paths, store: store, dbm: dbm)
+        let report = try ReconciliationSweep.run(paths: paths, store: store, dbm: dbm, caches: caches)
         XCTAssertEqual(report.orphansAdopted, 1)
         let book = try XCTUnwrap(try dbm.writer.read { try BookRecord.fetchOne($0) })
         XCTAssertEqual(book.title, "Orphan Book")
@@ -50,7 +50,7 @@ final class ReconciliationSweepTests: XCTestCase {
         }
         XCTAssertTrue(present)
         // idempotent: second sweep adopts nothing
-        XCTAssertEqual(try ReconciliationSweep.run(paths: paths, store: store, dbm: dbm).orphansAdopted, 0)
+        XCTAssertEqual(try ReconciliationSweep.run(paths: paths, store: store, dbm: dbm, caches: caches).orphansAdopted, 0)
     }
 
     func testMarksMissingFormats() throws {
@@ -60,7 +60,7 @@ final class ReconciliationSweepTests: XCTestCase {
         try FileManager.default.removeItem(
             at: paths.formatFile(bookID: bookID, formatID: UUID(uuidString: format.id)!, type: .epub))
 
-        let report = try ReconciliationSweep.run(paths: paths, store: store, dbm: dbm)
+        let report = try ReconciliationSweep.run(paths: paths, store: store, dbm: dbm, caches: caches)
         XCTAssertEqual(report.formatsMarkedMissing, 1)
         let row = try dbm.writer.read { db in
             try Row.fetchOne(db, sql: "SELECT present, missing FROM format_local WHERE formatId = ?",
@@ -88,7 +88,7 @@ final class ReconciliationSweepTests: XCTestCase {
         let afterOrphan1 = try FileManager.default.contentsOfDirectory(
             at: paths.booksDir, includingPropertiesForKeys: nil).map(\.lastPathComponent)
         let orphan1Name = try XCTUnwrap(Set(afterOrphan1).subtracting(beforeOrphan1).first)
-        XCTAssertEqual(try ReconciliationSweep.run(paths: paths, store: store, dbm: dbm).orphansAdopted, 1)
+        XCTAssertEqual(try ReconciliationSweep.run(paths: paths, store: store, dbm: dbm, caches: caches).orphansAdopted, 1)
 
         // Now that orphan1's bookID is a real row, copy its sidecar into a *new* folder (a
         // different name, so it still looks orphaned) -- adopting it will try to insert a
@@ -118,7 +118,7 @@ final class ReconciliationSweepTests: XCTestCase {
         XCTAssertThrowsError(try pipeline.importFile(at: orphan2))
         pipeline.failpoint = nil
 
-        let report = try ReconciliationSweep.run(paths: paths, store: store, dbm: dbm)
+        let report = try ReconciliationSweep.run(paths: paths, store: store, dbm: dbm, caches: caches)
         XCTAssertEqual(report.orphansAdopted, 1, "only the good orphan (Orphan2)")
         XCTAssertEqual(report.failures, 1, "the colliding folder must be counted as a failure, not thrown")
         XCTAssertEqual(report.formatsMarkedMissing, 1, "phase 3 still ran after the phase-2 failure")
@@ -153,7 +153,7 @@ final class ReconciliationSweepTests: XCTestCase {
         ], applySeq: 0)
         try Sidecar.write(sidecar, to: folder.appendingPathComponent("metadata.json"))
 
-        let report = try ReconciliationSweep.run(paths: paths, store: store, dbm: dbm)
+        let report = try ReconciliationSweep.run(paths: paths, store: store, dbm: dbm, caches: caches)
         XCTAssertEqual(report.orphansAdopted, 1)
         XCTAssertEqual(report.failures, 0)
 
@@ -188,7 +188,7 @@ final class ReconciliationSweepTests: XCTestCase {
         ], applySeq: 0)
         try Sidecar.write(sidecar, to: folder.appendingPathComponent("metadata.json"))
 
-        let report = try ReconciliationSweep.run(paths: paths, store: store, dbm: dbm)
+        let report = try ReconciliationSweep.run(paths: paths, store: store, dbm: dbm, caches: caches)
         XCTAssertEqual(report.orphansAdopted, 1)
 
         let row = try dbm.writer.read { db in
@@ -197,5 +197,97 @@ final class ReconciliationSweepTests: XCTestCase {
         }
         XCTAssertEqual(row["present"] as Bool, false)
         XCTAssertEqual(row["missing"] as Bool, true)
+    }
+
+    func testStaleImportingRowsAreMarkedFailedBySweep() throws {
+        // simulate a crash mid-import: row left at 'importing'
+        let epub = try Fixtures.makeEPUB(title: "Stale", author: "A", isbn: nil, dir: dir)
+        pipeline.failpoint = .afterStaging
+        XCTAssertThrowsError(try pipeline.importFile(at: epub))
+        let importing = try dbm.writer.read { db in
+            try Int.fetchOne(db, sql: "SELECT count(*) FROM import_item WHERE status = 'importing'")!
+        }
+        XCTAssertEqual(importing, 1)
+
+        let report = try ReconciliationSweep.run(paths: paths, store: store, dbm: dbm, caches: caches)
+        XCTAssertEqual(report.staleImportsFailed, 1)
+        let row = try dbm.writer.read { db in
+            try Row.fetchOne(db, sql: "SELECT status, message FROM import_item")!
+        }
+        XCTAssertEqual(row["status"] as String, "failed")
+        XCTAssertNotNil(row["message"] as String?)
+    }
+
+    func testSweepAdoptsSidecarFormatsForKnownBooks() throws {
+        // attach crash after the sidecar write: sidecar lists a format the DB doesn't know
+        let first = try Fixtures.makeEPUB(title: "Known", author: "A", isbn: "9991112223334", dir: dir)
+        guard case let .imported(bookID) = try pipeline.importFile(at: first) else { return XCTFail() }
+        let second = try Fixtures.makeEPUB(title: "Known Two", author: "A", isbn: "9991112223334", dir: dir)
+        pipeline.failpoint = .afterAttachSidecar
+        XCTAssertThrowsError(try pipeline.importFile(at: second, resolution: .attach(toBook: bookID)))
+        pipeline.failpoint = nil
+        XCTAssertEqual(try store.fetchFormats(bookID: bookID).count, 1) // DB behind sidecar
+
+        let report = try ReconciliationSweep.run(paths: paths, store: store, dbm: dbm, caches: caches)
+        XCTAssertEqual(report.formatsAdoptedForKnownBooks, 1)
+        let formats = try store.fetchFormats(bookID: bookID)
+        XCTAssertEqual(formats.count, 2)
+        // adopted format is present (its file was written before the sidecar)
+        let adopted = formats.first { $0.originalFileName == second.lastPathComponent }
+        XCTAssertNotNil(adopted)
+        // idempotent
+        XCTAssertEqual(try ReconciliationSweep.run(paths: paths, store: store, dbm: dbm, caches: caches)
+            .formatsAdoptedForKnownBooks, 0)
+    }
+
+    func testSweepDeletesStalePartialFiles() throws {
+        let epub = try Fixtures.makeEPUB(title: "P", author: "A", isbn: nil, dir: dir)
+        guard case let .imported(bookID) = try pipeline.importFile(at: epub) else { return XCTFail() }
+        let stale = paths.bookDir(bookID).appendingPathComponent("\(UUID().uuidString).epub.partial")
+        try Data("half".utf8).write(to: stale)
+
+        let report = try ReconciliationSweep.run(paths: paths, store: store, dbm: dbm, caches: caches)
+        XCTAssertEqual(report.partialsDeleted, 1)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: stale.path))
+    }
+
+    func testOrphanAdoptionSkipsDuplicateContentHash() throws {
+        // book already in the DB; an orphan folder re-describes the same bytes under a new bookID
+        let epub = try Fixtures.makeEPUB(title: "Dup", author: "A", isbn: nil, dir: dir)
+        guard case let .imported(bookID) = try pipeline.importFile(at: epub) else { return XCTFail() }
+        let format = try XCTUnwrap(store.fetchFormats(bookID: bookID).first)
+        let orphanID = UUID()
+        let orphanDir = paths.bookDir(orphanID)
+        try FileManager.default.createDirectory(at: orphanDir, withIntermediateDirectories: true)
+        let sidecar = Sidecar(bookID: orphanID,
+                              metadata: ExtractedMetadata(title: "Dup", titleSort: "Dup", language: "en",
+                                                          publisher: nil, bookDescription: nil,
+                                                          contributors: [], identifiers: []),
+                              formats: [.init(formatID: UUID(), formatType: .epub,
+                                              originalFileName: "dup.epub", byteSize: format.byteSize,
+                                              contentHash: format.contentHash)],
+                              applySeq: 0)
+        try Sidecar.write(sidecar, to: orphanDir.appendingPathComponent("metadata.json"))
+
+        let report = try ReconciliationSweep.run(paths: paths, store: store, dbm: dbm, caches: caches)
+        XCTAssertEqual(report.orphansAdopted, 0)
+        XCTAssertEqual(report.orphansSkippedAsDuplicates, 1)
+        XCTAssertEqual(try dbm.writer.read { try Int.fetchOne($0, sql: "SELECT count(*) FROM book")! }, 1)
+    }
+
+    func testAdoptedOrphanGetsThumbnailsBackfilled() throws {
+        let epub = try Fixtures.makeEPUB(title: "Thumb", author: "A", isbn: nil,
+                                         coverJPEG: Fixtures.tinyJPEG(), dir: dir)
+        pipeline.failpoint = .afterRename  // crash BEFORE ThumbnailPipeline ran
+        XCTAssertThrowsError(try pipeline.importFile(at: epub))
+        pipeline.failpoint = nil
+
+        let report = try ReconciliationSweep.run(paths: paths, store: store, dbm: dbm, caches: caches)
+        XCTAssertEqual(report.orphansAdopted, 1)
+        let bookID = try XCTUnwrap(try dbm.writer.read { db in
+            try String.fetchOne(db, sql: "SELECT id FROM book")
+        }).flatMap(UUID.init(uuidString:)) ?? UUID()
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: caches.thumbnail(bookID: bookID, size: .grid).path))
     }
 }

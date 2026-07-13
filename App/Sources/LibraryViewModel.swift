@@ -6,6 +6,7 @@ import IqraLibrary
 @Observable @MainActor
 final class LibraryViewModel {
     private(set) var books: [BookListItem] = []
+    private(set) var readingState: ReadingStateStore?
     private(set) var quarantined: [ImportItemRecord] = []
     private(set) var isReady = false
     var searchText = "" { didSet { Task { await refreshSearch() } } }
@@ -19,6 +20,9 @@ final class LibraryViewModel {
     private var paths: LibraryPaths!
     private var caches: LibraryPaths.Caches!
     private var observationTask: Task<Void, Never>?
+    /// The one active reader, cached so `readerModel(for:)` is idempotent under repeated
+    /// SwiftUI body re-evaluation (see `readerModel(for:)`).
+    private var activeReader: (bookID: UUID, model: ReaderViewModel)?
 
     func start() async {
         do {
@@ -39,9 +43,10 @@ final class LibraryViewModel {
                 catalogueURL: appSupport.appendingPathComponent("catalogue.sqlite"),
                 ftsURL: appSupport.appendingPathComponent("fts.sqlite"))
             store = LibraryStore(dbm: dbm)
+            readingState = ReadingStateStore(dbm: dbm)
             pipeline = ImportPipeline(store: store, dbm: dbm, paths: paths, caches: caches)
-            try ReconciliationSweep.run(paths: paths, store: store, dbm: dbm)
-            quarantined = try store.quarantinedItems()
+            try ReconciliationSweep.run(paths: paths, store: store, dbm: dbm, caches: caches)
+            quarantined = try store.recoveryItems()
             await restartObservation()
             isReady = true
         } catch {
@@ -50,9 +55,28 @@ final class LibraryViewModel {
     }
 
     func coverURL(for bookID: UUID) -> URL? {
-        guard let caches else { return nil }
-        let url = caches.thumbnail(bookID: bookID, size: .grid)
-        return FileManager.default.fileExists(atPath: url.path) ? url : nil
+        guard let caches, let paths else { return nil }
+        let thumb = caches.thumbnail(bookID: bookID, size: .grid)
+        if FileManager.default.fileExists(atPath: thumb.path) { return thumb }
+        let cover = paths.cover(bookID: bookID)
+        return FileManager.default.fileExists(atPath: cover.path) ? cover : nil
+    }
+
+    /// Idempotent: `LibraryView`'s `.navigationDestination(for:)` calls this from inside a
+    /// view-builder closure, which SwiftUI re-evaluates on every `LibraryView` body pass (e.g.
+    /// the books observation firing, quarantined-items updates) — not just once per push. A
+    /// fresh `ReaderViewModel` per call would construct a new `EPUBNavigator`/`WKWebView`,
+    /// recompile the content-blocking rule list, re-write `markOpened`, and call `start()` on
+    /// every such re-eval, only for @State to discard it. Caching the single active reader
+    /// (correct for the current push-one-book navigation) makes repeat calls for the same
+    /// book a no-op.
+    func readerModel(for bookID: UUID) -> ReaderViewModel? {
+        if let activeReader, activeReader.bookID == bookID { return activeReader.model }
+        guard let store, let readingState, let paths else { return nil }
+        guard let model = ReaderViewModel(bookID: bookID, store: store,
+                                          readingState: readingState, paths: paths) else { return nil }
+        activeReader = (bookID, model)
+        return model
     }
 
     func importFiles(_ urls: [URL]) async {
@@ -60,24 +84,40 @@ final class LibraryViewModel {
             lastError = "The library isn't ready yet. Please try again in a moment."
             return
         }
-        var batchErrors: [String] = []
-        for url in urls {
-            let scoped = url.startAccessingSecurityScopedResource()
-            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-            do {
-                let result = try pipeline.importFile(at: url)
-                if case let .needsUserDecision(existingBookID) = result {
-                    pendingIdentifierMatches.append((url, existingBookID))
+        // Import work is CPU+IO heavy (copy, hash, unzip): run the batch off the MainActor.
+        // The closure returns its results instead of mutating captured vars — mutating a
+        // captured `var` from inside a `@Sendable` closure trips strict-concurrency capture
+        // diagnostics, since the compiler can't see that the batch runs sequentially.
+        let (batchErrors, conflicts): ([String], [(sourceURL: URL, existingBookID: UUID)]) =
+            await Task.detached(priority: .userInitiated) {
+                var batchErrors: [String] = []
+                var conflicts: [(sourceURL: URL, existingBookID: UUID)] = []
+                for url in urls {
+                    let scoped = url.startAccessingSecurityScopedResource()
+                    defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+                    #if os(macOS)
+                    let bookmark = try? url.bookmarkData(options: .withSecurityScope,
+                                                         includingResourceValuesForKeys: nil, relativeTo: nil)
+                    #else
+                    let bookmark = try? url.bookmarkData()
+                    #endif
+                    do {
+                        let result = try pipeline.importFile(at: url, sourceBookmark: bookmark)
+                        if case let .needsUserDecision(existingBookID) = result {
+                            conflicts.append((url, existingBookID))
+                        }
+                    } catch {
+                        batchErrors.append("Import failed for \(url.lastPathComponent): \(error)")
+                    }
                 }
-            } catch {
-                batchErrors.append("Import failed for \(url.lastPathComponent): \(error)")
-            }
-        }
+                return (batchErrors, conflicts)
+            }.value
+        pendingIdentifierMatches.append(contentsOf: conflicts)
         if !batchErrors.isEmpty {
             importErrors.append(contentsOf: batchErrors)
             lastError = importErrors.joined(separator: "\n")
         }
-        quarantined = (try? store.quarantinedItems()) ?? quarantined
+        quarantined = (try? store.recoveryItems()) ?? quarantined
     }
 
     /// Pops and resolves the first queued identifier-match prompt. The alert re-presents
@@ -93,9 +133,16 @@ final class LibraryViewModel {
         let scoped = pending.sourceURL.startAccessingSecurityScopedResource()
         defer { if scoped { pending.sourceURL.stopAccessingSecurityScopedResource() } }
         do {
+            #if os(macOS)
+            let bookmark = try? pending.sourceURL.bookmarkData(options: .withSecurityScope,
+                                                               includingResourceValuesForKeys: nil, relativeTo: nil)
+            #else
+            let bookmark = try? pending.sourceURL.bookmarkData()
+            #endif
             _ = try pipeline.importFile(
                 at: pending.sourceURL,
-                resolution: attach ? .attach(toBook: pending.existingBookID) : .importAsNewBook)
+                resolution: attach ? .attach(toBook: pending.existingBookID) : .importAsNewBook,
+                sourceBookmark: bookmark)
         } catch {
             importErrors.append("\(error)")
             lastError = importErrors.joined(separator: "\n")

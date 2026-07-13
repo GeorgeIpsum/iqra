@@ -179,21 +179,46 @@ extension LibraryStore {
         }
     }
 
-    public func quarantinedItems() throws -> [ImportItemRecord] {
+    /// Items the recovery UI surfaces: quarantined (DRM/unsupported/corrupt), failed
+    /// (real errors or crash-interrupted imports), and pending (identifier matches the
+    /// user never resolved — e.g. the app quit with the prompt queued).
+    public func recoveryItems() throws -> [ImportItemRecord] {
         try dbm.writer.read { db in
-            // 'failed' is intentionally included alongside 'quarantined': the recovery
-            // UI surfaces both so the user can retry or resolve import failures.
             try ImportItemRecord
-                .filter(Column("status") == "quarantined" || Column("status") == "failed")
+                .filter(["quarantined", "failed", "pending"].contains(Column("status")))
                 .order(Column("updatedAt").desc)
                 .fetchAll(db)
         }
     }
 
+    /// Deprecated spelling kept for source compatibility; use `recoveryItems()`.
+    public func quarantinedItems() throws -> [ImportItemRecord] { try recoveryItems() }
+
     public func observeBooks(sort: BookSort) -> ValueObservation<ValueReducers.Fetch<[BookListItem]>> {
         ValueObservation.tracking { db in
             let sql = Self.assembleSQL(orderBy: sort.sql)
             return Self.mapItems(try Row.fetchAll(db, sql: sql))
+        }
+    }
+
+    /// The format the reader opens for this book: the first locally-present, non-deleted
+    /// EPUB. (Other format types get navigators in M4/M5.)
+    public func openableFormat(bookID: UUID) throws -> FormatRecord? {
+        try dbm.writer.read { db in
+            try FormatRecord.fetchOne(db, sql: """
+                SELECT f.* FROM format f
+                JOIN format_local fl ON fl.formatId = f.id
+                WHERE f.bookId = ? AND f.deleted = 0 AND f.formatType = 'epub' AND fl.present = 1
+                ORDER BY f.addedAt ASC LIMIT 1
+                """, arguments: [bookID.uuidString])
+        }
+    }
+
+    public func markOpened(bookID: UUID) throws {
+        try dbm.writer.write { db in
+            let seq = try dbm.nextApplySequence(db)
+            try db.execute(sql: "UPDATE book SET lastOpenedAt = ?, applySeq = ? WHERE id = ?",
+                           arguments: [Date(), seq, bookID.uuidString])
         }
     }
 }
