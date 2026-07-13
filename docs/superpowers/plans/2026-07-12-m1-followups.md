@@ -6,19 +6,27 @@ block at the start of M2 (EPUB reading) or as a short M1.5 hardening pass.
 
 ## Early M2 (correctness/UX seams the reviewer flagged as real)
 
-1. **import_item crash/pending reconciliation + bookmark persistence.**
+1. ~~**import_item crash/pending reconciliation + bookmark persistence.**
    Sweep gains a phase that marks stale `importing` rows `failed`; recovery UI
    query includes `pending`; `sourceBookmark` (security-scoped) actually stored
-   at first upsert so retry can re-access files under sandbox.
-2. **Sweep reconciles sidecar-ahead-of-DB formats for KNOWN books** (attach
+   at first upsert so retry can re-access files under sandbox.~~
+   **DONE (M2)** — `ec80bc7` (import_item crash recovery, pending rows in
+   recovery UI, source bookmarks).
+2. ~~**Sweep reconciles sidecar-ahead-of-DB formats for KNOWN books** (attach
    crash window leftovers; also `.partial` temp-file cleanup and adoption
-   passing through the dedupe ladder to avoid duplicate books on retry).
-3. **Thumbnail backfill:** sweep adoption runs ThumbnailPipeline from the
+   passing through the dedupe ladder to avoid duplicate books on retry).~~
+   **DONE (M2)** — `2dc7afd` (sweep reconciles attach-crash leftovers, stale
+   partials, duplicate orphans), `4f4a915` (isolate duplicate-hash check).
+3. ~~**Thumbnail backfill:** sweep adoption runs ThumbnailPipeline from the
    folder's cover.jpg; `coverURL(for:)` falls back to `paths.cover(bookID:)`
-   when the Caches thumbnail is missing (Caches purge recovery).
-4. **Off-main-actor import:** `importFiles` moves off the MainActor
+   when the Caches thumbnail is missing (Caches purge recovery).~~
+   **DONE (M2)** — `5b6db4f` (thumbnail backfill on adoption and cover
+   fallback after cache purge).
+4. ~~**Off-main-actor import:** `importFiles` moves off the MainActor
    (ImportPipeline made Sendable-safe or dispatched); streaming SHA-256 in
-   `sha256Hex` (currently whole-file `Data(contentsOf:)`).
+   `sha256Hex` (currently whole-file `Data(contentsOf:)`).~~
+   **DONE (M2)** — `b9e315a` (streaming SHA-256 and off-main-actor batch
+   import).
 
 ## M2 app-shell polish batch
 
