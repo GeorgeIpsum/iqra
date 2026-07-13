@@ -67,6 +67,24 @@ public final class EPUBNavigator: NSObject {
     public func next() { call("iqra.next()") }
     public func prev() { call("iqra.prev()") }
 
+    public func addAnnotation(_ annotation: Annotation) {
+        let payload: [String: Any] = [
+            "cfi": annotation.locator.cfi ?? "",
+            "color": annotation.color?.cssColor ?? NSNull(),
+            "kind": annotation.kind.rawValue,
+        ]
+        guard annotation.locator.cfi != nil,
+              let data = try? JSONSerialization.data(withJSONObject: payload) else { return }
+        call("iqra.addAnnotation(\(String(decoding: data, as: UTF8.self)))")
+    }
+
+    public func removeAnnotation(cfi: String) {
+        guard let data = try? JSONSerialization.data(withJSONObject: ["cfi": cfi]) else { return }
+        call("iqra.removeAnnotation(\(String(decoding: data, as: UTF8.self)))")
+    }
+
+    public func deselect() { call("iqra.deselect()") }
+
     public func apply(settings: ReaderSettings) {
         self.settings = settings
         if let json = try? String(decoding: JSONEncoder().encode(settings), as: UTF8.self) {
@@ -128,6 +146,25 @@ public final class EPUBNavigator: NSObject {
             delegate?.navigator(didRelocate: locator)
         case "error":
             delegate?.navigator(didFail: dict["message"] as? String ?? "unknown reader error")
+        case "selected":
+            guard let text = dict["text"] as? String, let cfi = dict["cfi"] as? String,
+                  let rect = dict["rect"] as? [String: Any] else { return }
+            let selRect = SelectionRect(x: rect["x"] as? Double ?? 0, y: rect["y"] as? Double ?? 0,
+                                        width: rect["width"] as? Double ?? 0, height: rect["height"] as? Double ?? 0)
+            var context: TextContext?
+            if let tc = dict["textContext"] as? [String: Any] {
+                context = TextContext(before: tc["before"] as? String ?? "",
+                                      highlight: tc["highlight"] as? String ?? text,
+                                      after: tc["after"] as? String ?? "")
+            }
+            let progression = dict["totalProgression"] as? Double ?? 0
+            delegate?.navigator(didChangeSelection: SelectionInfo(
+                text: text, cfi: cfi, rect: selRect, spineIndex: dict["spineIndex"] as? Int ?? 0,
+                totalProgression: progression.isFinite ? progression : 0, textContext: context))
+        case "selectionCleared":
+            delegate?.navigator(didChangeSelection: nil)
+        case "annotationTapped":
+            if let value = dict["value"] as? String { delegate?.navigator(didTapAnnotation: value) }
         default:
             break
         }

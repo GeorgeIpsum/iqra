@@ -8,6 +8,13 @@ public protocol NavigatorDelegate: AnyObject {
     func navigatorDidLoad(title: String?, toc: [TOCItem])
     func navigator(didRelocate locator: Locator)
     func navigator(didFail message: String)
+    func navigator(didChangeSelection selection: SelectionInfo?)
+    func navigator(didTapAnnotation cfi: String)
+}
+
+public extension NavigatorDelegate {
+    func navigator(didChangeSelection selection: SelectionInfo?) {}
+    func navigator(didTapAnnotation cfi: String) {}
 }
 
 public struct TOCItem: Codable, Equatable, Sendable {
