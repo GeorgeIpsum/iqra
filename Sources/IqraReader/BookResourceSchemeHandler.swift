@@ -50,7 +50,9 @@ public struct BookResourceResolver: Sendable {
 
         switch path {
         case "book.epub":
-            guard let data = try? Data(contentsOf: bookFileURL) else { return nil }
+            // Library files are immutable post-import: memory-map instead of reading the
+            // whole (potentially large) EPUB into unmapped heap memory.
+            guard let data = try? Data(contentsOf: bookFileURL, options: .mappedIfSafe) else { return nil }
             return Response(data: data, mimeType: "application/epub+zip")
         case "index.html":
             return bundled("ReaderAssets/reader.html", mime: "text/html")
