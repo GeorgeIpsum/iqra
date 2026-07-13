@@ -54,12 +54,12 @@ final class ReaderViewModel: NavigatorDelegate {
     }
 
     func navigator(didRelocate locator: Locator) {
-        progressPercent = Int((locator.totalProgression * 100).rounded())
-        tocLabel = locator.tocLabel
         if let json = try? locator.jsonData() {
             _ = try? readingState.saveLocator(json: json, totalProgression: locator.totalProgression,
                                               bookID: bookID, formatID: formatID)
         }
+        progressPercent = Int((locator.totalProgression * 100).rounded())
+        tocLabel = locator.tocLabel
     }
 
     func navigator(didFail message: String) {

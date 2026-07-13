@@ -20,6 +20,9 @@ final class LibraryViewModel {
     private var paths: LibraryPaths!
     private var caches: LibraryPaths.Caches!
     private var observationTask: Task<Void, Never>?
+    /// The one active reader, cached so `readerModel(for:)` is idempotent under repeated
+    /// SwiftUI body re-evaluation (see `readerModel(for:)`).
+    private var activeReader: (bookID: UUID, model: ReaderViewModel)?
 
     func start() async {
         do {
@@ -43,7 +46,7 @@ final class LibraryViewModel {
             readingState = ReadingStateStore(dbm: dbm)
             pipeline = ImportPipeline(store: store, dbm: dbm, paths: paths, caches: caches)
             try ReconciliationSweep.run(paths: paths, store: store, dbm: dbm, caches: caches)
-            quarantined = try store.quarantinedItems()
+            quarantined = try store.recoveryItems()
             await restartObservation()
             isReady = true
         } catch {
@@ -59,10 +62,21 @@ final class LibraryViewModel {
         return FileManager.default.fileExists(atPath: cover.path) ? cover : nil
     }
 
+    /// Idempotent: `LibraryView`'s `.navigationDestination(for:)` calls this from inside a
+    /// view-builder closure, which SwiftUI re-evaluates on every `LibraryView` body pass (e.g.
+    /// the books observation firing, quarantined-items updates) — not just once per push. A
+    /// fresh `ReaderViewModel` per call would construct a new `EPUBNavigator`/`WKWebView`,
+    /// recompile the content-blocking rule list, re-write `markOpened`, and call `start()` on
+    /// every such re-eval, only for @State to discard it. Caching the single active reader
+    /// (correct for the current push-one-book navigation) makes repeat calls for the same
+    /// book a no-op.
     func readerModel(for bookID: UUID) -> ReaderViewModel? {
+        if let activeReader, activeReader.bookID == bookID { return activeReader.model }
         guard let store, let readingState, let paths else { return nil }
-        return ReaderViewModel(bookID: bookID, store: store,
-                               readingState: readingState, paths: paths)
+        guard let model = ReaderViewModel(bookID: bookID, store: store,
+                                          readingState: readingState, paths: paths) else { return nil }
+        activeReader = (bookID, model)
+        return model
     }
 
     func importFiles(_ urls: [URL]) async {
