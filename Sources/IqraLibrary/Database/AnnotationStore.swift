@@ -5,7 +5,7 @@ import GRDB
 /// JSON to this layer — IqraLibrary never imports reader types. Deletes are permanent
 /// tombstones; every write stamps a fresh apply sequence.
 public final class AnnotationStore: @unchecked Sendable {
-    let dbm: DatabaseManager
+    public let dbm: DatabaseManager
     public init(dbm: DatabaseManager) { self.dbm = dbm }
 
     public func upsert(id: UUID, bookID: UUID, formatID: UUID, kind: String,
