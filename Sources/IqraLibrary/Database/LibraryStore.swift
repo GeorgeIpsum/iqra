@@ -179,16 +179,20 @@ extension LibraryStore {
         }
     }
 
-    public func quarantinedItems() throws -> [ImportItemRecord] {
+    /// Items the recovery UI surfaces: quarantined (DRM/unsupported/corrupt), failed
+    /// (real errors or crash-interrupted imports), and pending (identifier matches the
+    /// user never resolved — e.g. the app quit with the prompt queued).
+    public func recoveryItems() throws -> [ImportItemRecord] {
         try dbm.writer.read { db in
-            // 'failed' is intentionally included alongside 'quarantined': the recovery
-            // UI surfaces both so the user can retry or resolve import failures.
             try ImportItemRecord
-                .filter(Column("status") == "quarantined" || Column("status") == "failed")
+                .filter(["quarantined", "failed", "pending"].contains(Column("status")))
                 .order(Column("updatedAt").desc)
                 .fetchAll(db)
         }
     }
+
+    /// Deprecated spelling kept for source compatibility; use `recoveryItems()`.
+    public func quarantinedItems() throws -> [ImportItemRecord] { try recoveryItems() }
 
     public func observeBooks(sort: BookSort) -> ValueObservation<ValueReducers.Fetch<[BookListItem]>> {
         ValueObservation.tracking { db in

@@ -198,4 +198,23 @@ final class ReconciliationSweepTests: XCTestCase {
         XCTAssertEqual(row["present"] as Bool, false)
         XCTAssertEqual(row["missing"] as Bool, true)
     }
+
+    func testStaleImportingRowsAreMarkedFailedBySweep() throws {
+        // simulate a crash mid-import: row left at 'importing'
+        let epub = try Fixtures.makeEPUB(title: "Stale", author: "A", isbn: nil, dir: dir)
+        pipeline.failpoint = .afterStaging
+        XCTAssertThrowsError(try pipeline.importFile(at: epub))
+        let importing = try dbm.writer.read { db in
+            try Int.fetchOne(db, sql: "SELECT count(*) FROM import_item WHERE status = 'importing'")!
+        }
+        XCTAssertEqual(importing, 1)
+
+        let report = try ReconciliationSweep.run(paths: paths, store: store, dbm: dbm)
+        XCTAssertEqual(report.staleImportsFailed, 1)
+        let row = try dbm.writer.read { db in
+            try Row.fetchOne(db, sql: "SELECT status, message FROM import_item")!
+        }
+        XCTAssertEqual(row["status"] as String, "failed")
+        XCTAssertNotNil(row["message"] as String?)
+    }
 }

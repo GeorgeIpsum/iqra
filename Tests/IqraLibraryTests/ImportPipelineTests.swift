@@ -265,4 +265,15 @@ final class ImportPipelineTests: XCTestCase {
         XCTAssertEqual(unwrapped["status"] as String, "failed")
         XCTAssertNotNil(unwrapped["message"] as String?)
     }
+
+    func testSourceBookmarkIsPersistedOnImportItem() throws {
+        let epub = try Fixtures.makeEPUB(title: "BM", author: "A", isbn: nil, dir: dir)
+        let fakeBookmark = Data("bookmark-bytes".utf8)
+        _ = try pipeline.importFile(at: epub, sourceBookmark: fakeBookmark)
+        let stored = try dbm.writer.read { db in
+            try Data.fetchOne(db, sql: "SELECT sourceBookmark FROM import_item WHERE sourceDisplayPath = ?",
+                              arguments: [epub.path])
+        }
+        XCTAssertEqual(stored, fakeBookmark)
+    }
 }

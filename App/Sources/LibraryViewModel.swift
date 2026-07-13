@@ -65,7 +65,13 @@ final class LibraryViewModel {
             let scoped = url.startAccessingSecurityScopedResource()
             defer { if scoped { url.stopAccessingSecurityScopedResource() } }
             do {
-                let result = try pipeline.importFile(at: url)
+                #if os(macOS)
+                let bookmark = try? url.bookmarkData(options: .withSecurityScope,
+                                                     includingResourceValuesForKeys: nil, relativeTo: nil)
+                #else
+                let bookmark = try? url.bookmarkData()
+                #endif
+                let result = try pipeline.importFile(at: url, sourceBookmark: bookmark)
                 if case let .needsUserDecision(existingBookID) = result {
                     pendingIdentifierMatches.append((url, existingBookID))
                 }
@@ -93,9 +99,16 @@ final class LibraryViewModel {
         let scoped = pending.sourceURL.startAccessingSecurityScopedResource()
         defer { if scoped { pending.sourceURL.stopAccessingSecurityScopedResource() } }
         do {
+            #if os(macOS)
+            let bookmark = try? pending.sourceURL.bookmarkData(options: .withSecurityScope,
+                                                               includingResourceValuesForKeys: nil, relativeTo: nil)
+            #else
+            let bookmark = try? pending.sourceURL.bookmarkData()
+            #endif
             _ = try pipeline.importFile(
                 at: pending.sourceURL,
-                resolution: attach ? .attach(toBook: pending.existingBookID) : .importAsNewBook)
+                resolution: attach ? .attach(toBook: pending.existingBookID) : .importAsNewBook,
+                sourceBookmark: bookmark)
         } catch {
             importErrors.append("\(error)")
             lastError = importErrors.joined(separator: "\n")

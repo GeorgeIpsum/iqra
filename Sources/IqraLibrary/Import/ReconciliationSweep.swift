@@ -9,6 +9,8 @@ public struct SweepReport: Equatable, Sendable {
     /// Items whose per-item repair failed (bad orphan adoption, bad missing-binary update).
     /// The sweep isolates these instead of letting one bad item abort the whole run.
     public var failures = 0
+    /// Rows whose import was cut off by a crash and marked 'failed' by this sweep.
+    public var staleImportsFailed = 0
     public init() {}
 }
 
@@ -97,6 +99,25 @@ public enum ReconciliationSweep {
                 }
             }
         }
+
+        // 4. import_item rows stuck at 'importing' can only mean a crash mid-import
+        //    (every live code path ends in a terminal status or 'pending'). Mark them
+        //    failed so the recovery UI can offer a retry via the stored bookmark.
+        do {
+            let stale = try dbm.writer.write { db in
+                try db.execute(sql: """
+                    UPDATE import_item
+                    SET status = 'failed', message = 'Interrupted by a crash or forced quit',
+                        updatedAt = ?
+                    WHERE status = 'importing'
+                    """, arguments: [Date()])
+                return db.changesCount
+            }
+            report.staleImportsFailed = stale
+        } catch {
+            report.failures += 1
+        }
+
         return report
     }
 }

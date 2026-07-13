@@ -45,13 +45,14 @@ public final class ImportPipeline {
     }
 
     @discardableResult
-    public func importFile(at url: URL, resolution: IdentifierResolution = .ask) throws -> ImportResult {
+    public func importFile(at url: URL, resolution: IdentifierResolution = .ask,
+                           sourceBookmark: Data? = nil) throws -> ImportResult {
         // A resolving call (.attach/.importAsNewBook) settles a decision an earlier .ask call
         // already recorded as a "pending" import_item row for this path — reuse that row's id
         // instead of minting a new one, so the pending row reaches a terminal status instead
         // of being orphaned forever.
         let itemID = try reusableItemID(path: url.path, resolution: resolution)
-        try upsertImportItem(id: itemID, path: url.path, status: "importing", rejection: nil, bookId: nil)
+        try upsertImportItem(id: itemID, path: url.path, status: "importing", rejection: nil, bookId: nil, bookmark: sourceBookmark)
 
         do {
             // 1. sniff — magic bytes, never extension
@@ -271,16 +272,17 @@ public final class ImportPipeline {
 
     private func upsertImportItem(id: String, path: String, status: String,
                                   rejection: ImportRejection?, bookId: String?,
-                                  message: String? = nil) throws {
+                                  message: String? = nil, bookmark: Data? = nil) throws {
         try dbm.writer.write { db in
             try db.execute(sql: """
                 INSERT INTO import_item (id, sourceBookmark, sourceDisplayPath, status, rejection,
                                          message, attemptCount, createdAt, updatedAt, bookId)
-                VALUES (?, NULL, ?, ?, ?, ?, 1, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET status = excluded.status,
                     rejection = excluded.rejection, message = excluded.message,
+                    sourceBookmark = COALESCE(excluded.sourceBookmark, import_item.sourceBookmark),
                     updatedAt = excluded.updatedAt, bookId = excluded.bookId
-                """, arguments: [id, path, status, rejection?.rawValue, message, Date(), Date(), bookId])
+                """, arguments: [id, bookmark, path, status, rejection?.rawValue, message, Date(), Date(), bookId])
         }
     }
 }
