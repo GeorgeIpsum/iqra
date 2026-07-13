@@ -143,6 +143,11 @@ private final class MessageProxy: NSObject, WKScriptMessageHandler {
     weak var navigator: EPUBNavigator?
     init(_ navigator: EPUBNavigator) { self.navigator = navigator }
     func userContentController(_ c: WKUserContentController, didReceive message: WKScriptMessage) {
+        // Content iframes (sandboxed, same-origin blob: book content) must never speak the
+        // bridge protocol — only the top-level reader.html/bridge.js may post relocate/
+        // loaded/error/ready messages. Reject anything from a non-main frame before it
+        // reaches the actor-isolated handler.
+        guard message.frameInfo.isMainFrame else { return }
         MainActor.assumeIsolated { navigator?.handle(message: message.body) }
     }
 }

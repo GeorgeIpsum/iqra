@@ -141,4 +141,82 @@ final class EPUBNavigatorTests: XCTestCase {
         XCTAssertEqual(restoredLocator.totalProgression, deepLocator.totalProgression, accuracy: 0.05)
         XCTAssertNotNil(deepCFI) // the anchor that made the restore precise
     }
+
+    /// Pins the CFI-precedence fix in the "ready" handler: `lastLocator?.cfi ??
+    /// initialLocator?.cfi`. A WebContent-process crash mid-session must recover to the
+    /// most recently visited position, not silently rewind to wherever the navigator was
+    /// constructed (spec "Process-kill recovery contract"). Simulates the crash by
+    /// invoking the public recovery entry point, `webViewWebContentProcessDidTerminate`,
+    /// directly — it triggers the same reload/ready/relocate path a real WebContent death
+    /// would, without needing to actually kill the content process in a test harness.
+    ///
+    /// `initialLocator` must be a genuine, *different* CFI from the deep position for this
+    /// test to actually discriminate the fix (if it's nil, both orderings of `??` fall
+    /// through to `lastLocator` identically and the test is vacuous — confirmed by a
+    /// mutation check while writing this test). So we first seed a real start-of-book CFI
+    /// from a throwaway navigator and freeze it as `initialLocator` on the navigator under
+    /// test, mirroring how a real caller would pass in the last-persisted locator.
+    @MainActor
+    func testCrashRecoveryRestoresDeepPositionNotStart() async throws {
+        let epub = try makeFixtureEPUB(title: "Recovery", paragraphs: 120, dir: dir)
+
+        let seedNav = EPUBNavigator(bookID: UUID(), bookFileURL: epub,
+                                    initialLocator: nil, settings: .default)
+        seedNav.webView.frame = CGRect(x: 0, y: 0, width: 800, height: 600)
+        let seedRecorder = DelegateRecorder()
+        seedNav.delegate = seedRecorder
+        let seedRelocated = expectation(description: "seed relocated")
+        seedRelocated.assertForOverFulfill = false
+        seedRecorder.onRelocate = { seedRelocated.fulfill() }
+        seedNav.start()
+        await fulfillment(of: [seedRelocated], timeout: 30)
+        let startLocator = try XCTUnwrap(seedRecorder.locators.first)
+        XCTAssertLessThan(startLocator.totalProgression, 0.3) // sanity: genuinely near the start
+
+        let nav = EPUBNavigator(bookID: UUID(), bookFileURL: epub,
+                                initialLocator: startLocator, settings: .default)
+        nav.webView.frame = CGRect(x: 0, y: 0, width: 800, height: 600)
+        let recorder = DelegateRecorder()
+        nav.delegate = recorder
+        let loaded = expectation(description: "loaded")
+        recorder.onLoad = { loaded.fulfill() }
+        nav.start()
+        await fulfillment(of: [loaded], timeout: 30)
+
+        // jump deep into the book so lastLocator diverges from the frozen initialLocator
+        let jumped = expectation(description: "jumped")
+        jumped.assertForOverFulfill = false
+        recorder.onRelocate = {
+            if (recorder.locators.last?.totalProgression ?? 0) > 0.5 { jumped.fulfill() }
+        }
+        nav.goTo(fraction: 0.8)
+        await fulfillment(of: [jumped], timeout: 30)
+
+        // A single goTo can emit more than one relocate as the renderer settles (see the
+        // other tests' `assertForOverFulfill = false`). Anchor "post-recovery" on the
+        // reloaded page's own "loaded" post rather than "the next relocate we happen to
+        // see" — a stray pre-reload relocate arriving late would otherwise still carry
+        // the deep CFI and let a buggy recovery path pass by accident. bridge.js always
+        // posts "loaded" before its own "relocate" within a single start() run, so once
+        // this second "loaded" fires, any relocate we see afterward is genuinely from the
+        // reloaded page's recovery navigation, not a leftover from before the crash.
+        let reloaded = expectation(description: "reloaded")
+        recorder.onLoad = { reloaded.fulfill() }
+        nav.webViewWebContentProcessDidTerminate(nav.webView)
+        await fulfillment(of: [reloaded], timeout: 30)
+
+        // simulate WebContent process death: the page reloads, bridge.js posts "ready"
+        // again, and the ready handler must re-send lastLocator's CFI (the deep position
+        // just reached), not initialLocator's (the frozen start-of-book position).
+        let recovered = expectation(description: "recovered")
+        recovered.assertForOverFulfill = false
+        recorder.onRelocate = {
+            if (recorder.locators.last?.totalProgression ?? 0) > 0.5 { recovered.fulfill() }
+        }
+        await fulfillment(of: [recovered], timeout: 30)
+
+        let restoredLocator = try XCTUnwrap(recorder.locators.last)
+        XCTAssertGreaterThan(restoredLocator.totalProgression, 0.5,
+                             "crash recovery must restore the freshest position, not the frozen initialLocator")
+    }
 }
