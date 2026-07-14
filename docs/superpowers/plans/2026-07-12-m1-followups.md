@@ -94,6 +94,58 @@ layout → TOC navigates to a chapter. On iOS Simulator: same book, swipe, rotat
   gives no cross-DB atomicity, and "FTS is rebuildable" has no rebuild code
   yet. Add a rebuild/consistency check before search correctness matters.
 
+## Deferred from M3 final whole-branch review (branch m3-annotations-search)
+
+Merge verdict was "with fixes"; the six merge-blockers were fixed (persist/
+delete error surfacing, search-spinner reset on error, selection-bar edge
+clamp, NoteEditor accessibility, tombstone + cross-section-overlay tests).
+These remain open:
+
+- **M4 PRE-WORK (do BEFORE the PDF/comics navigators): capability-protocol
+  split.** The spec mandates a base `Navigator` + `TextSelectable`/
+  `RangeAnnotatable`/`Searchable` capability protocols so the UI can't offer
+  highlighting on a CBZ page. M1–M3 put everything on one flat
+  `NavigatorDelegate` + concrete `EPUBNavigator`. This must land before M4
+  adds non-text navigators, not with them. Also fix the stale
+  `NavigatorProtocols.swift` comment promising capability protocols "arrive
+  with their features in M3/M4" — M3's features arrived without them.
+- **Search-hit flood:** the bridge posts one message per hit and each does an
+  @Observable List append; a common word in a full book = thousands of IPC
+  round-trips + list diffs. foliate already yields hits batched per section
+  (`subitems`) — post one message per section, or cap total hits (~500) with
+  a "truncated" marker.
+- **Search-result decorations cleared too eagerly:** tapping a result
+  dismisses the sheet whose `onDismiss` calls `clearSearch()`, so the user
+  lands on the passage with no visible match outline and loses query+results.
+  Clear only on explicit Done.
+- **createHighlight locator drops `spineHref`/`progressionInChapter`** (the
+  bridge `selected` payload doesn't carry `spineHref`). The spec's composite
+  locator wants it as the robust re-anchor key if a spine shifts — cheap to
+  add now (bridge + Locator), annoying to backfill.
+- **Bookmark identity is exact CFI-string equality:** change font size/width
+  and the same page yields a different CFI (button reads un-bookmarked,
+  toggle stacks a near-dup). Eventually use a fuzzy match (spine + progression
+  tolerance).
+- **NoteEditor Cancel doesn't revert a color change** (changeColor persists
+  immediately). Apply color on Done, or rename the affordance.
+- Minor polish carried from per-task reviews: selection-bar `onDismiss`
+  unused (no tap-outside dismiss on native chrome); empty search query only
+  clears on submit not live typing; highlights/bookmarks re-filtered per
+  access in the list; `AnnotationStore.dbm` public (a `values(in:)`-wrapping
+  method would hide `DatabaseManager`); dead `currentIndex` var in bridge.js
+  (fix opportunistically); keyboard (Shift+Arrow) selection unreported
+  (accessibility pass).
+
+## Manual smoke test — STILL OWED (M3 Task 9 Step 5)
+
+On macOS + iOS: open an EPUB → select text → color bar → pick a color →
+highlight drawn → tap it → note editor → add note / change color / Done →
+annotations list shows the note glyph → tap it → navigates back → **turn
+several pages and back → the highlight is still drawn** (this create-overlay
+redraw path is now unit-tested but never visually confirmed) → bookmark a
+page, toggle off → Find in Book → results stream → tap one → navigates →
+quit + relaunch → highlights/notes/bookmarks all restored.
+
 ## Test-only deferrals (fold into the M5 gauntlet corpus)
 
 - Sniffer: zip with wrong mimetype content, corrupt PK zip, 0-byte file.
