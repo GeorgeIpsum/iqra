@@ -56,6 +56,20 @@ final class AnnotationStoreTests: XCTestCase {
         XCTAssertTrue(row.deleted)
     }
 
+    /// A later upsert of the same id (e.g. a stale sync replay racing a delete) must not
+    /// resurrect a tombstoned annotation: `deleted` is monotonic, never reset by upsert's
+    /// ON CONFLICT path.
+    func testUpsertDoesNotResurrectATombstone() throws {
+        let id = UUID()
+        try annotations.upsert(id: id, bookID: bookID, formatID: formatID, kind: "highlight",
+                               locatorJSON: locator(spine: 1, progress: 0.1), color: "blue", noteText: nil)
+        try annotations.delete(id: id)
+        try annotations.upsert(id: id, bookID: bookID, formatID: formatID, kind: "highlight",
+                               locatorJSON: locator(spine: 1, progress: 0.2), color: "green", noteText: "x")
+        let row = try XCTUnwrap(annotations.annotation(id: id))
+        XCTAssertTrue(row.deleted)
+    }
+
     func testListIsOrderedBySpineThenProgress() throws {
         // insert out of order
         for (spine, prog) in [(3, 0.5), (1, 0.9), (1, 0.2), (2, 0.4)] {

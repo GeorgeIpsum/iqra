@@ -42,9 +42,27 @@ final class EPUBNavigatorAnnotationTests: XCTestCase {
         return url
     }
 
+    /// Two-section EPUB, each section a single short paragraph with its own distinguishable
+    /// text, for a section-turn / overlay-redraw test (Fix 6).
+    func makeTwoSectionEPUB() throws -> URL {
+        let url = dir.appendingPathComponent(UUID().uuidString + ".epub")
+        let a = try Archive(url: url, accessMode: .create, pathEncoding: nil)
+        func add(_ n: String, _ t: String) throws {
+            let d = Data(t.utf8)
+            try a.addEntry(with: n, type: .file, uncompressedSize: Int64(d.count),
+                           provider: { p, s in d.subdata(in: Int(p)..<Int(p)+s) })
+        }
+        try add("mimetype", "application/epub+zip")
+        try add("META-INF/container.xml", #"<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#)
+        try add("content.opf", #"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Ann2</dc:title><dc:language>en</dc:language><dc:identifier id="uid">urn:uuid:z</dc:identifier></metadata><manifest><item id="c1" href="c1.xhtml" media-type="application/xhtml+xml"/><item id="c2" href="c2.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c1"/><itemref idref="c2"/></spine></package>"#)
+        try add("c1.xhtml", #"<html xmlns="http://www.w3.org/1999/xhtml"><body><p id="target">The quick brown fox jumps over the lazy dog and keeps running for a while.</p></body></html>"#)
+        try add("c2.xhtml", #"<html xmlns="http://www.w3.org/1999/xhtml"><body><p id="target2">A sleepy turtle napped through the whole afternoon beneath a wide fig tree.</p></body></html>"#)
+        return url
+    }
+
     @MainActor
-    fileprivate func makeNavigator(_ recorder: AnnRecorder) throws -> EPUBNavigator {
-        let nav = EPUBNavigator(bookID: UUID(), bookFileURL: try makeEPUB(),
+    fileprivate func makeNavigator(_ recorder: AnnRecorder, epubURL: URL? = nil) throws -> EPUBNavigator {
+        let nav = EPUBNavigator(bookID: UUID(), bookFileURL: try epubURL ?? makeEPUB(),
                                 initialLocator: nil, settings: .default)
         nav.webView.frame = CGRect(x: 0, y: 0, width: 800, height: 600)
         nav.delegate = recorder
@@ -153,6 +171,81 @@ final class EPUBNavigatorAnnotationTests: XCTestCase {
         XCTAssertEqual(rec.tapped.last, annotationCFI)
 
         nav.removeAnnotation(cfi: annotationCFI) // must not throw / error
+    }
+
+    /// Fix 6: proves the `create-overlay` re-add mechanism actually redraws an annotation
+    /// after a section turn, not just that `addAnnotation` draws on the currently-visible
+    /// section. foliate-js's paginator keeps exactly one page-view alive at a time
+    /// (`#createView` destroys the previous view's iframe + overlayer before creating the
+    /// next), so leaving section 1 for good tears its overlayer down entirely; returning to
+    /// it later creates a brand-new overlayer and fires `create-overlayer` -> bridge.js's
+    /// `create-overlay` handler, which must walk its tracked annotations and redraw whatever
+    /// is anchored in section 1. This is the simpler of the two variants the fix calls for
+    /// (annotate section 1, leave, come back, assert the redraw) — chosen because deriving a
+    /// stable section-2 CFI up front would need an extra round of section-switching with no
+    /// added coverage of the mechanism under test.
+    @MainActor
+    func testAnnotationRedrawnAfterReturningFromAnotherSection() async throws {
+        let rec = AnnRecorder()
+        let nav = try makeNavigator(rec, epubURL: try makeTwoSectionEPUB())
+        let loaded = expectation(description: "loaded"); rec.onLoad = { loaded.fulfill() }
+        nav.start(); await fulfillment(of: [loaded], timeout: 30)
+        try await waitForFirstSectionRendered(nav)
+
+        // Anchor an annotation in section 1 (the section currently showing).
+        let cfi = try await nav.webView.evaluateJavaScript("""
+            (() => {
+              const view = document.querySelector('foliate-view');
+              const iframe = view.renderer.getContents()[0].doc;
+              const p = iframe.getElementById('target');
+              const r = iframe.createRange(); r.selectNodeContents(p);
+              return view.getCFI(0, r);
+            })()
+            """) as? String
+        let section1CFI = try XCTUnwrap(cfi)
+        nav.addAnnotation(Annotation(id: UUID(), kind: .highlight,
+                                     locator: Locator(spineIndex: 0, cfi: section1CFI, totalProgression: 0.05),
+                                     color: .yellow, note: nil, createdAt: Date(), modifiedAt: Date()))
+
+        // Confirm it actually drew while section 1 was current (guards against a vacuous test).
+        var drawnBefore = 0
+        for _ in 0..<100 {
+            drawnBefore = try await nav.webView.evaluateJavaScript("""
+                document.querySelector('foliate-view').renderer.getContents()[0].overlayer.element.childElementCount
+                """) as? Int ?? 0
+            if drawnBefore == 1 { break }
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        XCTAssertEqual(drawnBefore, 1, "annotation should draw immediately while its section is current")
+
+        // Leave section 1 for section 2 -- this destroys section 1's page-view/overlayer.
+        nav.goTo(fraction: 0.9)
+        var onSectionTwo = false
+        for _ in 0..<150 {
+            onSectionTwo = (try? await nav.webView.evaluateJavaScript("""
+                document.querySelector('foliate-view').renderer.getContents()[0].index === 1
+                """) as? Bool) ?? false
+            if onSectionTwo { break }
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        XCTAssertTrue(onSectionTwo, "goTo(fraction: 0.9) should have crossed into section 2")
+
+        // Return to section 1 by CFI: a fresh overlayer is created there, and bridge.js's
+        // `create-overlay` handler must redraw the annotation still registered for it.
+        nav.goTo(cfi: section1CFI)
+        var redrawnCount = -1
+        for _ in 0..<150 {
+            redrawnCount = try await nav.webView.evaluateJavaScript("""
+                (() => {
+                  const c = document.querySelector('foliate-view').renderer.getContents()[0];
+                  return c.index === 0 ? c.overlayer.element.childElementCount : -1;
+                })()
+                """) as? Int ?? -1
+            if redrawnCount == 1 { break }
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        XCTAssertEqual(redrawnCount, 1,
+                       "returning to section 1 must redraw its registered annotation via create-overlay")
     }
 }
 
