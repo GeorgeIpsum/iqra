@@ -20,6 +20,7 @@ final class LibraryViewModel {
     private var paths: LibraryPaths!
     private var caches: LibraryPaths.Caches!
     private var observationTask: Task<Void, Never>?
+    private(set) var annotationStore: AnnotationStore?
     /// The one active reader, cached so `readerModel(for:)` is idempotent under repeated
     /// SwiftUI body re-evaluation (see `readerModel(for:)`).
     private var activeReader: (bookID: UUID, model: ReaderViewModel)?
@@ -44,6 +45,7 @@ final class LibraryViewModel {
                 ftsURL: appSupport.appendingPathComponent("fts.sqlite"))
             store = LibraryStore(dbm: dbm)
             readingState = ReadingStateStore(dbm: dbm)
+            annotationStore = AnnotationStore(dbm: dbm)
             pipeline = ImportPipeline(store: store, dbm: dbm, paths: paths, caches: caches)
             try ReconciliationSweep.run(paths: paths, store: store, dbm: dbm, caches: caches)
             quarantined = try store.recoveryItems()
@@ -72,9 +74,9 @@ final class LibraryViewModel {
     /// book a no-op.
     func readerModel(for bookID: UUID) -> ReaderViewModel? {
         if let activeReader, activeReader.bookID == bookID { return activeReader.model }
-        guard let store, let readingState, let paths else { return nil }
-        guard let model = ReaderViewModel(bookID: bookID, store: store,
-                                          readingState: readingState, paths: paths) else { return nil }
+        guard let store, let readingState, let annotationStore, let paths else { return nil }
+        guard let model = ReaderViewModel(bookID: bookID, store: store, readingState: readingState,
+                                          annotationStore: annotationStore, paths: paths) else { return nil }
         activeReader = (bookID, model)
         return model
     }

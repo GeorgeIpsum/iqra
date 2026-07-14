@@ -4,6 +4,7 @@
 import './vendor/foliate-js/view.js'
 import { EPUB } from './vendor/foliate-js/epub.js'
 import { configure, ZipReader, BlobReader, TextWriter, BlobWriter } from './vendor/foliate-js/vendor/zip.js'
+import { Overlayer } from './vendor/foliate-js/overlayer.js'
 
 const post = payload => window.webkit?.messageHandlers?.iqra?.postMessage(payload)
 window.addEventListener('error', e => post({ type: 'error', message: String(e.message) }))
@@ -59,6 +60,63 @@ view.addEventListener('relocate', e => {
         totalProgression: Number.isFinite(fraction) ? fraction : 0, // foliate-js can emit NaN mid-layout; never post a non-finite number
         tocLabel: tocItem?.label ?? null,
     })
+})
+
+// --- annotations + selection (M3) ---
+const annotations = new Map()   // cfi -> { value, color, kind }; the page-side mirror of the DB,
+                                // re-drawn per section because foliate overlays die with the iframe.
+let currentIndex = 0
+let searchIter = null
+
+// Grab up to `n` chars of text before/after a range's boundaries for fuzzy re-anchoring.
+const contextText = (range, n = 40) => {
+    const beforeR = range.cloneRange(); beforeR.collapse(true)
+    beforeR.setStart(range.startContainer.ownerDocument.body, 0)
+    const afterR = range.cloneRange(); afterR.collapse(false)
+    const body = range.startContainer.ownerDocument.body
+    afterR.setEnd(body, body.childNodes.length)
+    const tail = s => s.length > n ? s.slice(-n) : s
+    const head = s => s.length > n ? s.slice(0, n) : s
+    return { before: tail(beforeR.toString()), highlight: range.toString(), after: head(afterR.toString()) }
+}
+
+view.addEventListener('load', ({ detail: { doc, index } }) => {
+    currentIndex = index
+    const emit = () => {
+        const sel = doc.getSelection()
+        if (!sel || sel.isCollapsed || !sel.rangeCount) { post({ type: 'selectionCleared' }); return }
+        const range = sel.getRangeAt(0)
+        const fr = doc.defaultView.frameElement.getBoundingClientRect()
+        const r = range.getBoundingClientRect()
+        post({
+            type: 'selected',
+            text: sel.toString(),
+            cfi: view.getCFI(index, range),
+            rect: { x: r.left + fr.left, y: r.top + fr.top, width: r.width, height: r.height },
+            spineIndex: index,
+            totalProgression: view.lastLocation?.fraction ?? 0,
+            textContext: contextText(range),
+        })
+    }
+    doc.addEventListener('pointerup', emit)
+    doc.addEventListener('selectionchange', () => {
+        if (doc.getSelection()?.isCollapsed) post({ type: 'selectionCleared' })
+    })
+})
+
+view.addEventListener('draw-annotation', ({ detail: { draw, annotation } }) => {
+    // Only highlights/notes draw a fill; bookmarks are position-only (no overlay).
+    if (annotation.kind === 'bookmark') return
+    draw(Overlayer.highlight, { color: annotation.color ?? '#F7D774' })
+})
+
+view.addEventListener('create-overlay', ({ detail: { index } }) => {
+    currentIndex = index
+    for (const a of annotations.values()) view.addAnnotation(a)   // no-op for non-visible sections
+})
+
+view.addEventListener('show-annotation', ({ detail: { value } }) => {
+    post({ type: 'annotationTapped', value })
 })
 
 const flattenTOC = items => (items ?? []).map(({ label, href, subitems }) =>
@@ -120,6 +178,31 @@ window.iqra = {
     next: () => view.next(),
     prev: () => view.prev(),
     setAppearance: s => applySettings(s),
+    addAnnotation(a) {
+        const entry = { value: a.cfi, color: a.color, kind: a.kind }
+        annotations.set(a.cfi, entry)
+        view.addAnnotation(entry)   // draws now if the section is visible; else create-overlay redraws later
+    },
+    removeAnnotation(a) {
+        annotations.delete(a.cfi)
+        view.deleteAnnotation({ value: a.cfi })
+    },
+    deselect() { view.deselect() },
+    async search(opts) {
+        this.clearSearch()
+        searchIter = view.search(opts)   // opts: { query, matchCase, matchDiacritics, matchWholeWords }
+        try {
+            for await (const r of searchIter) {
+                if (r === 'done') break
+                else if (r.subitems) for (const it of r.subitems)
+                    post({ type: 'searchHit', cfi: it.cfi, excerpt: it.excerpt, label: r.label })
+                else if (r.cfi) post({ type: 'searchHit', cfi: r.cfi, excerpt: r.excerpt, label: null })
+                else if (r.progress != null) post({ type: 'searchProgress', progress: r.progress })
+            }
+        } catch (e) { post({ type: 'error', message: 'search: ' + (e?.message ?? e) }) }
+        finally { post({ type: 'searchDone' }) }   // always clear the spinner: success, error, or cancellation
+    },
+    clearSearch() { searchIter?.return?.(); searchIter = null; view.clearSearch() },
 }
 
 post({ type: 'ready' })

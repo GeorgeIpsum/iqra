@@ -47,3 +47,18 @@ public struct ImportItemRecord: Codable, FetchableRecord, PersistableRecord, Ide
     public var updatedAt: Date
     public var bookId: String?
 }
+
+public struct AnnotationRecord: Codable, FetchableRecord, PersistableRecord, Identifiable, Equatable {
+    public static let databaseTableName = "annotation"
+    public var id: String
+    public var bookId: String
+    public var formatId: String
+    public var kind: String
+    public var locator: String
+    public var color: String?
+    public var noteText: String?
+    public var createdAt: Date
+    public var modifiedAt: Date
+    public var applySeq: Int64
+    public var deleted: Bool
+}
