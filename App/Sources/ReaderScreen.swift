@@ -14,6 +14,7 @@ struct ReaderScreen: View {
     @State private var showAppearance = false
     @State private var showTOC = false
     @State private var showAnnotations = false
+    @State private var showSearch = false
 
     var body: some View {
         WebViewContainer(webView: model.navigator.webView)
@@ -29,6 +30,7 @@ struct ReaderScreen: View {
                     Button("Next", systemImage: "chevron.right") { model.navigator.next() }
                     Button("Contents", systemImage: "list.bullet") { showTOC = true }
                         .disabled(model.toc.isEmpty)
+                    Button("Find", systemImage: "magnifyingglass") { showSearch = true }
                     Button("Appearance", systemImage: "textformat.size") { showAppearance = true }
                     Button(model.isCurrentPositionBookmarked ? "Bookmarked" : "Bookmark",
                            systemImage: model.isCurrentPositionBookmarked ? "bookmark.fill" : "bookmark") {
@@ -69,6 +71,9 @@ struct ReaderScreen: View {
                 AnnotationsListView(annotations: model.annotations,
                                     onOpen: { model.goTo($0) },
                                     onDelete: { model.deleteAnnotation($0) })
+            }
+            .sheet(isPresented: $showSearch, onDismiss: { model.clearSearch() }) {
+                SearchView(model: model)
             }
             .alert("Reader error", isPresented: .init(get: { model.readerError != nil },
                                                       set: { if !$0 { model.readerError = nil } })) {

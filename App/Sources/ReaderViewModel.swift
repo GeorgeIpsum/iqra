@@ -19,6 +19,11 @@ final class ReaderViewModel: NavigatorDelegate {
     private(set) var currentSelection: SelectionInfo?
     private(set) var activeAnnotation: Annotation?
 
+    // search state
+    private(set) var searchHits: [SearchHit] = []
+    private(set) var isSearching = false
+    var searchQuery = ""
+
     var settings: ReaderSettings {
         didSet {
             navigator.apply(settings: settings)
@@ -143,7 +148,26 @@ final class ReaderViewModel: NavigatorDelegate {
     /// VM-owned setter to stay the single source of truth.
     func dismissActiveAnnotation() { activeAnnotation = nil }
 
+    // MARK: NavigatorDelegate — search callbacks
+
+    func navigator(didFindSearchHit hit: SearchHit) { searchHits.append(hit) }
+    func navigatorDidFinishSearch() { isSearching = false }
+
     // MARK: Intents
+
+    func runSearch() {
+        let q = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty else { clearSearch(); return }
+        searchHits = []; isSearching = true
+        navigator.search(query: q)
+    }
+
+    func clearSearch() {
+        searchHits = []; isSearching = false; searchQuery = ""
+        navigator.clearSearch()
+    }
+
+    func goToHit(_ hit: SearchHit) { navigator.goTo(cfi: hit.cfi) }
 
     func clearSelection() { currentSelection = nil; navigator.deselect() }
 
