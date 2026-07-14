@@ -8,6 +8,12 @@ import AppKit
 import UIKit
 #endif
 
+/// Reads the size of the view it's attached to via `.background`, without altering layout.
+private struct SizePreferenceKey: PreferenceKey {
+    static var defaultValue: CGSize = CGSize(width: CGFloat.infinity, height: CGFloat.infinity)
+    static func reduce(value: inout CGSize, nextValue: () -> CGSize) { value = nextValue() }
+}
+
 struct ReaderScreen: View {
     @State var model: ReaderViewModel
     @Environment(\.dismiss) private var dismiss
@@ -15,10 +21,17 @@ struct ReaderScreen: View {
     @State private var showTOC = false
     @State private var showAnnotations = false
     @State private var showSearch = false
+    // Defaults to "infinite" so, before the first layout pass reports a real size, the
+    // clamp math below is a no-op and behaves exactly like the old top/left-only clamp.
+    @State private var containerSize = CGSize(width: CGFloat.infinity, height: CGFloat.infinity)
 
     var body: some View {
         WebViewContainer(webView: model.navigator.webView)
             .ignoresSafeArea(edges: .bottom)
+            .background(GeometryReader { proxy in
+                Color.clear.preference(key: SizePreferenceKey.self, value: proxy.size)
+            })
+            .onPreferenceChange(SizePreferenceKey.self) { containerSize = $0 }
             .navigationTitle(model.title ?? "")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
@@ -43,6 +56,16 @@ struct ReaderScreen: View {
             .sheet(isPresented: $showTOC) { TOCList(items: model.toc, model: model) }
             .overlay(alignment: .topLeading) {
                 if let sel = model.currentSelection {
+                    // The bar's width isn't known before layout; 260pt is a reasonable
+                    // estimate for the 5 swatches + divider + copy button (with padding).
+                    let barWidth: CGFloat = 260
+                    let barHeight: CGFloat = 44
+                    let maxX = max(8, containerSize.width - barWidth - 8)
+                    let maxY = max(8, containerSize.height - barHeight - 8)
+                    // Anchor above the selection when there's room; clamp on every edge so a
+                    // selection near the trailing/bottom/top edge still renders on-screen.
+                    let x = min(max(8, sel.rect.x), maxX)
+                    let y = min(max(8, sel.rect.y - 52), maxY)
                     SelectionColorBar(
                         onPick: { model.createHighlight(color: $0) },
                         onCopy: {
@@ -54,9 +77,8 @@ struct ReaderScreen: View {
                             model.clearSelection()
                         },
                         onDismiss: { model.clearSelection() })
-                        // Anchor above the selection; clamp into the view. The rect is in web-view
-                        // coordinates (bridge already mapped iframe→host).
-                        .offset(x: max(8, sel.rect.x), y: max(8, sel.rect.y - 52))
+                        // The rect is in web-view coordinates (bridge already mapped iframe→host).
+                        .offset(x: x, y: y)
                         .transition(.opacity)
                 }
             }
