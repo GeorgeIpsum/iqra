@@ -13,6 +13,7 @@ struct ReaderScreen: View {
     @Environment(\.dismiss) private var dismiss
     @State private var showAppearance = false
     @State private var showTOC = false
+    @State private var showAnnotations = false
 
     var body: some View {
         WebViewContainer(webView: model.navigator.webView)
@@ -33,6 +34,7 @@ struct ReaderScreen: View {
                            systemImage: model.isCurrentPositionBookmarked ? "bookmark.fill" : "bookmark") {
                         model.toggleBookmarkAtCurrentPosition()
                     }
+                    Button("Annotations", systemImage: "list.bullet.rectangle") { showAnnotations = true }
                 }
             }
             .popover(isPresented: $showAppearance) { AppearanceControls(model: model) }
@@ -62,6 +64,11 @@ struct ReaderScreen: View {
                            onSave: { model.setNote($0, for: ann) },
                            onChangeColor: { model.changeColor($0, for: ann) },
                            onDelete: { model.deleteAnnotation(ann) })
+            }
+            .sheet(isPresented: $showAnnotations) {
+                AnnotationsListView(annotations: model.annotations,
+                                    onOpen: { model.goTo($0) },
+                                    onDelete: { model.deleteAnnotation($0) })
             }
             .alert("Reader error", isPresented: .init(get: { model.readerError != nil },
                                                       set: { if !$0 { model.readerError = nil } })) {
