@@ -134,6 +134,7 @@ final class ReaderViewModel: NavigatorDelegate {
 
     func navigator(didFail message: String) {
         readerError = message
+        isSearching = false   // a JS error (e.g. mid-search) must not leave the spinner stuck
     }
 
     func navigator(didChangeSelection selection: SelectionInfo?) { currentSelection = selection }

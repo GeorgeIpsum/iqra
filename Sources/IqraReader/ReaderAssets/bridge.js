@@ -193,13 +193,14 @@ window.iqra = {
         searchIter = view.search(opts)   // opts: { query, matchCase, matchDiacritics, matchWholeWords }
         try {
             for await (const r of searchIter) {
-                if (r === 'done') { post({ type: 'searchDone' }); break }
+                if (r === 'done') break
                 else if (r.subitems) for (const it of r.subitems)
                     post({ type: 'searchHit', cfi: it.cfi, excerpt: it.excerpt, label: r.label })
                 else if (r.cfi) post({ type: 'searchHit', cfi: r.cfi, excerpt: r.excerpt, label: null })
                 else if (r.progress != null) post({ type: 'searchProgress', progress: r.progress })
             }
         } catch (e) { post({ type: 'error', message: 'search: ' + (e?.message ?? e) }) }
+        finally { post({ type: 'searchDone' }) }   // always clear the spinner: success, error, or cancellation
     },
     clearSearch() { searchIter?.return?.(); searchIter = null; view.clearSearch() },
 }
