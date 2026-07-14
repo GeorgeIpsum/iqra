@@ -49,10 +49,13 @@ struct NoteEditor: View {
                 Section("Highlight") {
                     HStack(spacing: 12) {
                         ForEach(HighlightColor.allCases, id: \.self) { c in
-                            Circle().fill(Color(hex: c.cssColor)).frame(width: 24, height: 24)
-                                .overlay(Circle().strokeBorder(.primary,
-                                    lineWidth: annotation.color == c ? 2 : 0))
-                                .onTapGesture { onChangeColor(c) }
+                            Button { onChangeColor(c) } label: {
+                                Circle().fill(Color(hex: c.cssColor)).frame(width: 24, height: 24)
+                                    .overlay(Circle().strokeBorder(.primary,
+                                        lineWidth: annotation.color == c ? 2 : 0))
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel(c.rawValue)
                         }
                     }
                 }
