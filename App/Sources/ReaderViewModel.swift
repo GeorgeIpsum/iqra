@@ -177,8 +177,12 @@ final class ReaderViewModel: NavigatorDelegate {
                               totalProgression: sel.totalProgression, textContext: sel.textContext)
         let annotation = Annotation(id: UUID(), kind: .highlight, locator: locator, color: color,
                                     note: nil, createdAt: Date(), modifiedAt: Date())
-        persist(annotation)
-        navigator.addAnnotation(annotation)
+        do {
+            try persist(annotation)
+            navigator.addAnnotation(annotation)
+        } catch {
+            readerError = "Couldn't save highlight: \(error)"
+        }
         clearSelection()
     }
 
@@ -187,21 +191,33 @@ final class ReaderViewModel: NavigatorDelegate {
         updated.note = text.isEmpty ? nil : text
         updated.kind = text.isEmpty ? .highlight : .note
         updated.modifiedAt = Date()
-        persist(updated)
-        activeAnnotation = nil
+        do {
+            try persist(updated)
+            activeAnnotation = nil
+        } catch {
+            readerError = "Couldn't save note: \(error)"
+        }
     }
 
     func changeColor(_ color: HighlightColor, for annotation: Annotation) {
         var updated = annotation; updated.color = color; updated.modifiedAt = Date()
-        persist(updated)
-        navigator.addAnnotation(updated)   // redraw in place (same CFI key)
-        if activeAnnotation?.id == annotation.id { activeAnnotation = updated }
+        do {
+            try persist(updated)
+            navigator.addAnnotation(updated)   // redraw in place (same CFI key)
+            if activeAnnotation?.id == annotation.id { activeAnnotation = updated }
+        } catch {
+            readerError = "Couldn't save highlight color: \(error)"
+        }
     }
 
     func deleteAnnotation(_ annotation: Annotation) {
-        try? annotationStore.delete(id: annotation.id)
-        if let cfi = annotation.locator.cfi { navigator.removeAnnotation(cfi: cfi) }
-        if activeAnnotation?.id == annotation.id { activeAnnotation = nil }
+        do {
+            try annotationStore.delete(id: annotation.id)
+            if let cfi = annotation.locator.cfi { navigator.removeAnnotation(cfi: cfi) }
+            if activeAnnotation?.id == annotation.id { activeAnnotation = nil }
+        } catch {
+            readerError = "Couldn't delete highlight: \(error)"
+        }
     }
 
     func goTo(_ annotation: Annotation) {
@@ -235,15 +251,19 @@ final class ReaderViewModel: NavigatorDelegate {
         if let existing = bookmarkedAnnotation(at: cfi) {
             deleteAnnotation(existing)
         } else {
-            persist(Annotation(id: UUID(), kind: .bookmark, locator: locator, color: nil,
-                               note: nil, createdAt: Date(), modifiedAt: Date()))
+            do {
+                try persist(Annotation(id: UUID(), kind: .bookmark, locator: locator, color: nil,
+                                       note: nil, createdAt: Date(), modifiedAt: Date()))
+            } catch {
+                readerError = "Couldn't save bookmark: \(error)"
+            }
         }
     }
 
-    private func persist(_ annotation: Annotation) {
-        guard let json = try? annotation.locator.jsonData() else { return }
-        try? annotationStore.upsert(id: annotation.id, bookID: bookID, formatID: formatID,
-                                    kind: annotation.kind.rawValue, locatorJSON: json,
-                                    color: annotation.color?.rawValue, noteText: annotation.note)
+    private func persist(_ annotation: Annotation) throws {
+        let json = try annotation.locator.jsonData()
+        try annotationStore.upsert(id: annotation.id, bookID: bookID, formatID: formatID,
+                                   kind: annotation.kind.rawValue, locatorJSON: json,
+                                   color: annotation.color?.rawValue, noteText: annotation.note)
     }
 }
