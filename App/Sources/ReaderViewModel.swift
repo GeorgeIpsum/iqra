@@ -171,6 +171,7 @@ final class ReaderViewModel: NavigatorDelegate {
         var updated = annotation; updated.color = color; updated.modifiedAt = Date()
         persist(updated)
         navigator.addAnnotation(updated)   // redraw in place (same CFI key)
+        if activeAnnotation?.id == annotation.id { activeAnnotation = updated }
     }
 
     func deleteAnnotation(_ annotation: Annotation) {
