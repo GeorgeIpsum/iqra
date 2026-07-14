@@ -16,9 +16,12 @@ before making structural decisions. Key locked decisions:
 
 - SwiftUI multiplatform app over three local Swift packages: IqraCore
   (shared models/protocols), IqraLibrary (GRDB catalogue + import
-  pipeline), IqraReader (navigators: EPUB shipped via foliate-js in a
-  WKWebView, vendored at pin `78914ae` under `Sources/IqraReader/Vendor/`;
-  PDFKit for PDF and a native pager for CBZ/CBR still pending, M4)
+  pipeline), IqraReader (navigators: EPUB via foliate-js in WKWebView,
+  vendored at pin `78914ae`, now supports highlights in 5 Books-style
+  colors, sticky notes, bookmarks, and in-book full-text search; PDFKit
+  for PDF and native pager for CBZ/CBR pending, M4). Annotations persist
+  in the `annotation` table via `AnnotationStore` (range-CFI anchoring
+  with text-context fallback, apply-seq versioning, tombstone deletes).
 - GRDB/SQLite persistence, records shaped for CloudKit (CKSyncEngine
   later); managed copy-on-import library folder; DRM-free formats only
 - Adversarial design-review transcripts are in `.lil-bro/` (gitignored)

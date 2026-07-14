@@ -37,6 +37,14 @@ block at the start of M2 (EPUB reading) or as a short M1.5 hardening pass.
   (Status as of M2 close: **0/7 implemented** — Task 11 verified none of these
   landed during M2; they remain open. Do not mark done without code.)
 
+## Deferred from M3 (branch m3-annotations-search)
+
+M3 shipped annotation persistence (highlights in 5 colors, sticky notes, bookmarks) and reader-side in-book full-text search, both with complete EPUB navigator tests. These features remain open for M4 or later:
+
+- **Catalogue FTS:** `content_fts` full-text search over the library catalogue is deferred (M3 shipped reader-side in-book search only; catalogue search remains by title/author prefix in the library UI).
+- **In-text margin indicator for noted passages:** the annotation list shows the note glyph, but in-text glyphs at the margin are deferred (foliate single-style overlay; requires careful CSS isolation to avoid layout thrash).
+- **Annotation export:** Markdown/CSV export of highlights and notes remains a M6 differentiator (M3 focused on read and inline edit).
+
 ## Deferred from M2 final whole-branch review (branch m2-epub-reading)
 
 Merge verdict was "with fixes"; the merge-blockers were fixed (reader-VM
