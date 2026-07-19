@@ -149,7 +149,16 @@ yet): a build-time check that greps the built `iqra.app`'s
 `codesign -d --entitlements` for `network.client`, run as part of any release
 step. macOS reader launch + render is now human-confirmed.
 
-## Manual smoke test — STILL OWED (M3 Task 9 Step 5)
+## Manual smoke test — M3 reader path CONFIRMED (2026-07-16, macOS)
+
+Human-confirmed working after the network-client entitlement fix: EPUB opens
+and renders paginated; select → color bar → highlight; note editor
+(add/change-color/delete); bookmarks; tap-to-edit an existing highlight; and
+highlights/notes/bookmarks all **restore on reopen**. Still unconfirmed by a
+human (not blocking): in-book search end-to-end, the iOS build in a simulator,
+and large/image-heavy-EPUB memory/perf.
+
+## Manual smoke test — original M1/M2 items still owed
 
 On macOS + iOS: open an EPUB → select text → color bar → pick a color →
 highlight drawn → tap it → note editor → add note / change color / Done →
