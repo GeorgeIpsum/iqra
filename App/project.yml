@@ -26,6 +26,12 @@ targets:
         ENABLE_HARDENED_RUNTIME: YES
         ENABLE_APP_SANDBOX: YES
         ENABLE_USER_SELECTED_FILES: readonly
+        # WKWebView's WebContent process cannot launch in a sandboxed macOS app
+        # without the outgoing-network (client) entitlement — even for purely
+        # local custom-scheme content. Without it the reader renders nothing and
+        # the console spams RBSAssertionErrorDomain "WebProcess does not exist".
+        # Not caught by `swift test` (the test host is unsandboxed).
+        ENABLE_OUTGOING_NETWORK_CONNECTIONS: YES
         INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace: NO
       configs:
         Debug:

@@ -136,6 +136,19 @@ These remain open:
   (fix opportunistically); keyboard (Shift+Arrow) selection unreported
   (accessibility pass).
 
+## Smoke-test finding (2026-07-16): WKWebView needs the network-client entitlement
+
+The first human smoke test found the reader rendered nothing in the sandboxed
+app (console spammed `RBSAssertionErrorDomain … "WebProcess … does not exist"`).
+Root cause: a sandboxed macOS app using WKWebView must carry
+`com.apple.security.network.client` or the WebContent process can't launch —
+even for purely local custom-scheme content. Fixed by adding
+`ENABLE_OUTGOING_NETWORK_CONNECTIONS: YES` to `App/project.yml`. **The package
+tests can never catch this** — `swift test` runs unsandboxed. Guard idea (no CI
+yet): a build-time check that greps the built `iqra.app`'s
+`codesign -d --entitlements` for `network.client`, run as part of any release
+step. macOS reader launch + render is now human-confirmed.
+
 ## Manual smoke test — STILL OWED (M3 Task 9 Step 5)
 
 On macOS + iOS: open an EPUB → select text → color bar → pick a color →
