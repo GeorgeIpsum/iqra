@@ -26,7 +26,16 @@ struct ReaderScreen: View {
     @State private var containerSize = CGSize(width: CGFloat.infinity, height: CGFloat.infinity)
 
     var body: some View {
-        WebViewContainer(webView: model.navigator.webView)
+        // TODO(Task 6): ReaderScreen hosts the right reader view per navigator kind (PDF/comic
+        // views land then). For now `NavigatorFactory` only ever builds an `EPUBNavigator`
+        // (openableFormat is epub-only until Phase B/C), so this downcast always succeeds.
+        Group {
+            if let webView = (model.navigator as? EPUBNavigator)?.webView {
+                WebViewContainer(webView: webView)
+            } else {
+                ContentUnavailableView("Unsupported format", systemImage: "exclamationmark.triangle")
+            }
+        }
             .ignoresSafeArea(edges: .bottom)
             .background(GeometryReader { proxy in
                 Color.clear.preference(key: SizePreferenceKey.self, value: proxy.size)
@@ -182,7 +191,10 @@ private struct TOCLevel: View {
     var body: some View {
         ForEach(Array(items.enumerated()), id: \.offset) { _, item in
             Button(item.label) {
-                if let href = item.href { model.navigator.goTo(cfi: href) } // goTo accepts hrefs too
+                // goTo(locator:) routes to goTo(cfi:) when cfi is set — hrefs work the same way.
+                if let href = item.href {
+                    model.navigator.goTo(locator: Locator(spineIndex: 0, cfi: href, totalProgression: 0))
+                }
                 dismiss()
             }
             if let sub = item.subitems {
