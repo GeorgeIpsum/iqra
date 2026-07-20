@@ -116,6 +116,8 @@ struct ReaderScreen: View {
             WebViewContainer(webView: epub.webView)
         } else if let pdf = model.navigator as? PDFNavigator {
             PDFReaderView(navigator: pdf)
+        } else if let comic = model.navigator as? ComicNavigator {
+            ComicReaderView(navigator: comic)
         } else {
             ContentUnavailableView("Unsupported", systemImage: "book.closed")
         }

@@ -74,9 +74,9 @@ final class LibraryViewModel {
     /// book a no-op.
     func readerModel(for bookID: UUID) -> ReaderViewModel? {
         if let activeReader, activeReader.bookID == bookID { return activeReader.model }
-        guard let store, let readingState, let annotationStore, let paths else { return nil }
+        guard let store, let readingState, let annotationStore, let paths, let caches else { return nil }
         guard let model = ReaderViewModel(bookID: bookID, store: store, readingState: readingState,
-                                          annotationStore: annotationStore, paths: paths) else { return nil }
+                                          annotationStore: annotationStore, paths: paths, caches: caches) else { return nil }
         activeReader = (bookID, model)
         return model
     }

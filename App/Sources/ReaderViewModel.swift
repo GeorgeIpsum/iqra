@@ -52,7 +52,7 @@ final class ReaderViewModel: NavigatorDelegate {
     private nonisolated(unsafe) var observationTask: Task<Void, Never>?
 
     init?(bookID: UUID, store: LibraryStore, readingState: ReadingStateStore,
-          annotationStore: AnnotationStore, paths: LibraryPaths) {
+          annotationStore: AnnotationStore, paths: LibraryPaths, caches: LibraryPaths.Caches) {
         guard let format = try? store.openableFormat(bookID: bookID),
               let formatUUID = UUID(uuidString: format.id),
               let type = FormatType(rawValue: format.formatType) else { return nil }
@@ -65,9 +65,9 @@ final class ReaderViewModel: NavigatorDelegate {
         let initial = (try? readingState.locatorJSON(bookID: bookID, formatID: formatUUID))
             .flatMap { try? Locator.from(jsonData: $0) }
         guard let navigator = NavigatorFactory.make(
-            formatType: type, bookID: bookID,
+            formatType: type, bookID: bookID, formatID: formatUUID,
             formatURL: paths.formatFile(bookID: bookID, formatID: formatUUID, type: type),
-            initialLocator: initial, settings: ReaderSettingsStore.load()) else { return nil }
+            initialLocator: initial, settings: ReaderSettingsStore.load(), caches: caches) else { return nil }
         self.navigator = navigator
         navigator.delegate = self
         try? store.markOpened(bookID: bookID)

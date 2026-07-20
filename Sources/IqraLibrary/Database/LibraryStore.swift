@@ -208,7 +208,7 @@ extension LibraryStore {
             try FormatRecord.fetchOne(db, sql: """
                 SELECT f.* FROM format f
                 JOIN format_local fl ON fl.formatId = f.id
-                WHERE f.bookId = ? AND f.deleted = 0 AND f.formatType IN ('epub','pdf') AND fl.present = 1
+                WHERE f.bookId = ? AND f.deleted = 0 AND f.formatType IN ('epub','pdf','cbz') AND fl.present = 1
                 ORDER BY f.addedAt ASC LIMIT 1
                 """, arguments: [bookID.uuidString])
         }
