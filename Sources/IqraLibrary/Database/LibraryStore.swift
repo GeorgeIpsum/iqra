@@ -202,7 +202,7 @@ extension LibraryStore {
     }
 
     /// The format the reader opens for this book: the first locally-present, non-deleted
-    /// EPUB or PDF. (Comics are added in Task 9.)
+    /// EPUB, PDF, or CBZ.
     public func openableFormat(bookID: UUID) throws -> FormatRecord? {
         try dbm.writer.read { db in
             try FormatRecord.fetchOne(db, sql: """

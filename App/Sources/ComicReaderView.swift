@@ -38,7 +38,11 @@ private struct ComicPageCell: View {
                 Image(decorative: cg, scale: 1, orientation: .up).resizable().scaledToFit()
             } else { Color.black }
         }
-        .task(id: url) { image = await Task.detached { Self.downsample(url, maxPixel: 2048) }.value }
+        .task(id: url) {
+            let decoded = await Task.detached { Self.downsample(url, maxPixel: 2048) }.value
+            guard !Task.isCancelled else { return }
+            image = decoded
+        }
         .onDisappear { image = nil }
     }
     nonisolated static func downsample(_ url: URL, maxPixel: Int) -> CGImage? {
