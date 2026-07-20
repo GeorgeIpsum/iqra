@@ -196,10 +196,11 @@ private struct TOCLevel: View {
     var body: some View {
         ForEach(Array(items.enumerated()), id: \.offset) { _, item in
             Button(item.label) {
-                // goTo(locator:) routes to goTo(cfi:) when cfi is set — hrefs work the same way.
-                if let href = item.href {
-                    model.navigator.goTo(locator: Locator(spineIndex: 0, cfi: href, totalProgression: 0))
-                }
+                // TOC href format differs per navigator: EPUB hands back a file href/fragment
+                // (resolved via the cfi branch of goTo(locator:)), while PDF hands back the
+                // destination page index as a string (only spineIndex is honored). goToTOC(_:)
+                // tells the two apart with Int(href) and routes to the format-appropriate field.
+                model.goToTOC(item)
                 dismiss()
             }
             if let sub = item.subitems {

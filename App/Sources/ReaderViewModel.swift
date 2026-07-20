@@ -232,6 +232,21 @@ final class ReaderViewModel: NavigatorDelegate {
 
     func goTo(_ annotation: Annotation) { navigator.goTo(locator: annotation.locator) }
 
+    // A TOC entry's `href` means different things per format: EPUB's is a file path/fragment
+    // (e.g. "ch1.xhtml#x") that only EPUBNavigator.goTo(locator:) can resolve, via its cfi
+    // branch; PDF's is a stringified destination page index (from PDFNavigator.toc(from:)),
+    // and PDFNavigator.goTo(locator:) reads only spineIndex, ignoring cfi entirely. The two
+    // formats are disjoint — an EPUB href is never a bare integer — so `Int(href)` reliably
+    // tells us which one we're looking at and lets one method route correctly for both.
+    func goToTOC(_ item: TOCItem) {
+        guard let href = item.href else { return }
+        if let page = Int(href) {
+            navigator.goTo(locator: Locator(spineIndex: page, cfi: nil, totalProgression: 0))
+        } else {
+            navigator.goTo(locator: Locator(spineIndex: 0, cfi: href, totalProgression: 0))
+        }
+    }
+
     // MARK: Bookmarks
 
     // Decide existence against the DB directly rather than the in-memory `annotations` array:
