@@ -139,8 +139,8 @@ final class ReaderViewModel: NavigatorDelegate {
 
     func navigator(didChangeSelection selection: SelectionInfo?) { currentSelection = selection }
 
-    func navigator(didTapAnnotation cfi: String) {
-        activeAnnotation = annotations.first { $0.locator.cfi == cfi }
+    func navigator(didTapAnnotation id: UUID) {
+        activeAnnotation = annotations.first { $0.id == id }
     }
 
     /// Clears the active annotation, e.g. when the note editor sheet is dismissed by the
@@ -214,7 +214,7 @@ final class ReaderViewModel: NavigatorDelegate {
     func deleteAnnotation(_ annotation: Annotation) {
         do {
             try annotationStore.delete(id: annotation.id)
-            if let cfi = annotation.locator.cfi { navigator.removeAnnotation(cfi: cfi) }
+            navigator.removeAnnotation(annotation)
             if activeAnnotation?.id == annotation.id { activeAnnotation = nil }
         } catch {
             readerError = "Couldn't delete highlight: \(error)"

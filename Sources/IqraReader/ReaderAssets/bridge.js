@@ -63,8 +63,8 @@ view.addEventListener('relocate', e => {
 })
 
 // --- annotations + selection (M3) ---
-const annotations = new Map()   // cfi -> { value, color, kind }; the page-side mirror of the DB,
-                                // re-drawn per section because foliate overlays die with the iframe.
+const annotations = new Map()   // cfi -> { value, color, kind, id }; the page-side mirror of the
+                                // DB, re-drawn per section because foliate overlays die with the iframe.
 let currentIndex = 0
 let searchIter = null
 
@@ -116,7 +116,8 @@ view.addEventListener('create-overlay', ({ detail: { index } }) => {
 })
 
 view.addEventListener('show-annotation', ({ detail: { value } }) => {
-    post({ type: 'annotationTapped', value })
+    const e = annotations.get(value)
+    post({ type: 'annotationTapped', id: e?.id ?? null, value })
 })
 
 const flattenTOC = items => (items ?? []).map(({ label, href, subitems }) =>
@@ -179,7 +180,7 @@ window.iqra = {
     prev: () => view.prev(),
     setAppearance: s => applySettings(s),
     addAnnotation(a) {
-        const entry = { value: a.cfi, color: a.color, kind: a.kind }
+        const entry = { value: a.cfi, color: a.color, kind: a.kind, id: a.id }
         annotations.set(a.cfi, entry)
         view.addAnnotation(entry)   // draws now if the section is visible; else create-overlay redraws later
     },
