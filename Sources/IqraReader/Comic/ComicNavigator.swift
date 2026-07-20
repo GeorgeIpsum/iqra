@@ -15,7 +15,6 @@ import Observation
     private let comicFileURL: URL
     private let cacheDir: URL
     private let initialLocator: Locator?
-    private var pageCount: Int { pages.count }
 
     public init(bookID: UUID, comicFileURL: URL, cacheDir: URL, initialLocator: Locator?) {
         self.comicFileURL = comicFileURL; self.cacheDir = cacheDir; self.initialLocator = initialLocator
@@ -37,7 +36,7 @@ import Observation
         delegate?.navigatorDidLoad(title: comicFileURL.deletingPathExtension().lastPathComponent, toc: [])
         let restore = min(max(0, initialLocator?.spineIndex ?? 0), max(0, pages.count - 1))
         currentIndex = restore
-        emitRelocate()   // ensure an initial position is persisted even if restore == 0 (didSet won't fire)
+        if restore == 0 { emitRelocate() }   // didSet already emitted for a non-zero restore; only page 0 (0→0) needs the explicit call
     }
 
     public func goTo(locator: Locator) {

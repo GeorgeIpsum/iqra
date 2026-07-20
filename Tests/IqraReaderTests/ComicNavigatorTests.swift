@@ -37,6 +37,32 @@ final class ComicNavigatorTests: XCTestCase {
     }
 
     @MainActor
+    func testStartEmitsExactlyOneRelocate() async throws {
+        // Test non-zero restore: restore = 3 should emit exactly one relocate
+        let cbz = try makeCBZ(pages: 5)
+        let cache1 = dir.appendingPathComponent("cache1")
+        let nav1 = ComicNavigator(bookID: UUID(), comicFileURL: cbz, cacheDir: cache1,
+                                  initialLocator: Locator(spineIndex: 3, cfi: nil, totalProgression: 0.75))
+        let rec1 = ComicRecorder(); nav1.delegate = rec1
+        let loaded1 = expectation(description: "loaded1"); rec1.onLoad = { loaded1.fulfill() }
+        nav1.start()
+        await fulfillment(of: [loaded1], timeout: 10)
+        XCTAssertEqual(rec1.locators.count, 1, "Non-zero restore (3) should emit exactly one relocate")
+        XCTAssertEqual(rec1.locators.first?.spineIndex, 3)
+
+        // Test zero restore: restore = 0 should emit exactly one relocate
+        let cache2 = dir.appendingPathComponent("cache2")
+        let nav2 = ComicNavigator(bookID: UUID(), comicFileURL: cbz, cacheDir: cache2,
+                                  initialLocator: nil)  // nil → restore = 0
+        let rec2 = ComicRecorder(); nav2.delegate = rec2
+        let loaded2 = expectation(description: "loaded2"); rec2.onLoad = { loaded2.fulfill() }
+        nav2.start()
+        await fulfillment(of: [loaded2], timeout: 10)
+        XCTAssertEqual(rec2.locators.count, 1, "Zero restore should emit exactly one relocate")
+        XCTAssertEqual(rec2.locators.first?.spineIndex, 0)
+    }
+
+    @MainActor
     func testPageChangeEmitsRelocate() async throws {
         let cbz = try makeCBZ(pages: 4)
         let nav = ComicNavigator(bookID: UUID(), comicFileURL: cbz,
