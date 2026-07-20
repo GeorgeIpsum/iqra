@@ -101,14 +101,21 @@ delete error surfacing, search-spinner reset on error, selection-bar edge
 clamp, NoteEditor accessibility, tombstone + cross-section-overlay tests).
 These remain open:
 
-- **M4 PRE-WORK (do BEFORE the PDF/comics navigators): capability-protocol
+- ~~**M4 PRE-WORK (do BEFORE the PDF/comics navigators): capability-protocol
   split.** The spec mandates a base `Navigator` + `TextSelectable`/
   `RangeAnnotatable`/`Searchable` capability protocols so the UI can't offer
   highlighting on a CBZ page. M1–M3 put everything on one flat
   `NavigatorDelegate` + concrete `EPUBNavigator`. This must land before M4
   adds non-text navigators, not with them. Also fix the stale
   `NavigatorProtocols.swift` comment promising capability protocols "arrive
-  with their features in M3/M4" — M3's features arrived without them.
+  with their features in M3/M4" — M3's features arrived without them.~~
+  **DONE (M4)** — `38d97e3` (base `Navigator` + `TextSelectable`/
+  `RangeAnnotatable`/`Searchable`/`AppearanceConfigurable` capability
+  protocols; stale `NavigatorProtocols.swift` comment fixed), `288b07e`
+  (format-neutral `ReaderViewModel` drives navigators by capability check).
+  `EPUBNavigator` conforms to all four (M4 Task 1); PDF conforms to all
+  four (M4 Task 3); `ComicNavigator` is base-only, as designed — CBZ pages
+  aren't text-selectable, searchable, or annotatable (M4 Tasks 7–9).
 - **Search-hit flood:** the bridge posts one message per hit and each does an
   @Observable List append; a common word in a full book = thousands of IPC
   round-trips + list diffs. foliate already yields hits batched per section
@@ -135,6 +142,98 @@ These remain open:
   method would hide `DatabaseManager`); dead `currentIndex` var in bridge.js
   (fix opportunistically); keyboard (Shift+Arrow) selection unreported
   (accessibility pass).
+
+## Deferred from M4 (branch m4-pdf-comics)
+
+M4 shipped the capability-protocol split (base `Navigator` +
+`TextSelectable`/`RangeAnnotatable`/`Searchable`/`AppearanceConfigurable`),
+PDFKit-backed PDF reading (read, two-page spread, outline TOC, search, text
+highlights + notes, bookmarks), and CBZ comics (paged image viewer,
+position, bookmarks) via a format-agnostic extract-to-cache + memory-
+windowed pager. These remain open:
+
+- **CBR (comic format):** the remaining comic archive format. Needs a
+  vendored `Unrar.swift`, a non-OSI UnRAR license acknowledgment, and
+  sequential (non-random-access) extraction — unlike CBZ's ZIP path, RAR
+  doesn't support cheap random-access reads. The viewer/cache/model layers
+  are already format-agnostic, so this is a clean later add, not a
+  redesign.
+- **MOBI:** still open, targeted for M5.
+- **PDF dark-mode page inversion:** deferred — dark mode currently only
+  swaps the reader chrome background, not the rendered page content (no
+  per-pixel inversion/recoloring of the PDF page itself).
+- **PDF two-page-spread settings toggle:** deferred — `PDFView.displayMode`
+  spread support exists and works, but there's no user-facing settings
+  control to switch it; wiring the toggle is UI polish, not a capability
+  gap.
+
+### M4 final whole-branch review — post-merge tickets (triaged Minor)
+
+From the fable final review of `m4-pdf-comics` (2f47d2c..fix). The one
+merge-blocking Important (synchronous CBZ extraction on the MainActor) was
+fixed before merge. These were triaged as post-merge follow-ups:
+
+- **Manga / RTL reading direction unreachable:** `ComicInfoParser`
+  (`ComicExtractor.swift`) hardcodes `readingDirection = "ltr"` and never
+  reads ComicRack's `Manga` field, so `ComicReaderView`'s RTL layout
+  (`layoutDirection`) can never trigger — manga read backwards. Parse the
+  field to light up the existing view support.
+- **`fatalError("unreachable")` in format routing** (`ImportPipeline.swift`,
+  ~L81): truly unreachable today (the guard filters to epub/pdf/cbz) but a
+  future guard-widening without a matching extractor becomes an import-path
+  crash. Return `.quarantined(.unsupportedFormat)` instead.
+- **`PDFAnnotationMapping.anchor` quad filter is a no-op:** the
+  `.filter { $0.count == 8 }` can never reject anything (`quad(from:)` always
+  returns 8 elements), so it doesn't filter the degenerate/zero-area quads it
+  appears intended to (the cross-page all-zero-quad case). Filter on
+  non-empty `rect(from:)` instead.
+- **`canSelectText` is dead code** (`ReaderViewModel.swift:35`): defined,
+  never consumed (the selection overlay gates on `currentSelection != nil`,
+  which is safe since comics never emit selections). Consume it in the UI
+  gate or delete it.
+- **Stale "CFI" comments after the `anchorKey` rename**
+  (`ReaderViewModel.swift:107,258`): still say "idempotency by CFI" / "keys
+  overlays by CFI" though the path now serves PDF (keyed by annotation id).
+- **Decode-failure vs still-decoding are both black** (`ComicReaderView.swift`
+  `ComicPageCell`): a corrupt/missing page renders as permanent `Color.black`
+  with no distinct "couldn't decode" placeholder.
+- **`public typealias PlatformColor`** (`PDFAnnotationMapping.swift`) exports a
+  collision-prone name from `IqraReader`'s public API — make it internal.
+- **Partial cache eviction:** `ComicExtractor.loadManifest` only checks
+  `manifest.json`; if the OS evicts individual page files but not the
+  manifest, pages render permanently black with no re-extract. Spot-check a
+  page file's existence, or re-extract on first missing page.
+- **`PDFNavigator.deinit` doesn't cancel `searchTask`** — harmless while
+  `findString` is synchronous; cheap hygiene alongside the observer removal.
+- **EPUB `SearchHit.locator` carries `spineIndex: 0`** (`EPUBNavigator.swift`)
+  — harmless today (EPUB `goTo` uses only the cfi) but a lurking wrong value
+  if anything later reads `hit.locator.spineIndex` for EPUB.
+
+## Manual smoke test — M4 OWED (PDF + CBZ), with reviewer-named checks
+
+Unrun by design (agents skip). On **macOS + iOS**: import a **PDF** → it
+renders; page forward/back (arrows/swipe); thumbnail scrubber jumps pages;
+progress % updates; open the outline TOC → **jump to a section (use a real
+outlined PDF — exercises the destination-via-action fallback)**; **select
+text → color bar → highlight**; tap the highlight → note editor; annotations
+list shows it → tap → navigates back; quit + relaunch → **position restored
+to a non-zero page** + highlights restored. Import a **CBZ** → pages render;
+swipe/arrow through them (**memory stays flat on a 200+ MB comic — also
+validates the async-extraction fix; first open should not freeze the UI**);
+**comic reopens restored to a non-zero saved page** (SwiftUI `scrollPosition`
+initial-value behavior); bookmark a page, toggle off; quit + relaunch → page
++ bookmark restored. Confirm a comic shows **no** Find/Appearance/highlight
+chrome (capability-gated).
+
+**NAMED RISK from the final review — macOS PDF selection-bar coordinates:**
+`PDFNavigator` emits `SelectionInfo.rect` via `pdfView.convert(_:from:page)`
+(AppKit view coordinates) and `ReaderScreen` positions the color bar treating
+`rect.y` as a top-origin offset (`y = sel.rect.y - 52`), an assumption
+inherited from the top-origin web-view path. If macOS `PDFView` reports
+**bottom-origin** coordinates, the bar appears vertically mirrored. **Check:
+select text in a PDF on macOS and confirm the color bar appears ABOVE the
+selection** — if it's mirrored, flip the y-origin (one line) in
+`ReaderScreen`'s PDF selection-bar placement.
 
 ## Smoke-test finding (2026-07-16): WKWebView needs the network-client entitlement
 

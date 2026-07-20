@@ -7,7 +7,8 @@ import WebKit
 /// responsibility (persist on every relocate — the DB, not the web view, is the source
 /// of truth; spec "Process-kill recovery contract").
 @MainActor
-public final class EPUBNavigator: NSObject {
+public final class EPUBNavigator: NSObject, Navigator, AppearanceConfigurable, TextSelectable,
+                                   RangeAnnotatable, Searchable {
     public let webView: WKWebView
     public weak var delegate: NavigatorDelegate?
     public private(set) var lastLocator: Locator?
@@ -64,6 +65,9 @@ public final class EPUBNavigator: NSObject {
 
     public func goTo(cfi: String) { call("iqra.goTo(\(jsString(cfi)))") }
     public func goTo(fraction: Double) { call("iqra.goTo({fraction: \(fraction)})") }
+    public func goTo(locator: Locator) {
+        if let cfi = locator.cfi { goTo(cfi: cfi) } else { goTo(fraction: locator.totalProgression) }
+    }
     public func next() { call("iqra.next()") }
     public func prev() { call("iqra.prev()") }
 
@@ -72,14 +76,16 @@ public final class EPUBNavigator: NSObject {
             "cfi": annotation.locator.cfi ?? "",
             "color": annotation.color?.cssColor ?? NSNull(),
             "kind": annotation.kind.rawValue,
+            "id": annotation.id.uuidString,
         ]
         guard annotation.locator.cfi != nil,
               let data = try? JSONSerialization.data(withJSONObject: payload) else { return }
         call("iqra.addAnnotation(\(String(decoding: data, as: UTF8.self)))")
     }
 
-    public func removeAnnotation(cfi: String) {
-        guard let data = try? JSONSerialization.data(withJSONObject: ["cfi": cfi]) else { return }
+    public func removeAnnotation(_ annotation: Annotation) {
+        guard let cfi = annotation.locator.cfi,
+              let data = try? JSONSerialization.data(withJSONObject: ["cfi": cfi]) else { return }
         call("iqra.removeAnnotation(\(String(decoding: data, as: UTF8.self)))")
     }
 
@@ -165,13 +171,18 @@ public final class EPUBNavigator: NSObject {
                                       after: tc["after"] as? String ?? "")
             }
             let progression = dict["totalProgression"] as? Double ?? 0
+            let spineIndex = dict["spineIndex"] as? Int ?? 0
+            let clampedProgression = progression.isFinite ? progression : 0
+            let locator = Locator(spineIndex: spineIndex, cfi: cfi,
+                                  totalProgression: clampedProgression, textContext: context)
             delegate?.navigator(didChangeSelection: SelectionInfo(
-                text: text, cfi: cfi, rect: selRect, spineIndex: dict["spineIndex"] as? Int ?? 0,
-                totalProgression: progression.isFinite ? progression : 0, textContext: context))
+                text: text, cfi: cfi, rect: selRect, spineIndex: spineIndex,
+                totalProgression: clampedProgression, textContext: context, locator: locator))
         case "selectionCleared":
             delegate?.navigator(didChangeSelection: nil)
         case "annotationTapped":
-            if let value = dict["value"] as? String { delegate?.navigator(didTapAnnotation: value) }
+            guard let idString = dict["id"] as? String, let id = UUID(uuidString: idString) else { return }
+            delegate?.navigator(didTapAnnotation: id)
         case "searchHit":
             guard let cfi = dict["cfi"] as? String else { return }
             let ex = dict["excerpt"] as? [String: Any]
@@ -180,7 +191,8 @@ public final class EPUBNavigator: NSObject {
                 excerptPre: ex?["pre"] as? String ?? "",
                 excerptMatch: ex?["match"] as? String ?? "",
                 excerptPost: ex?["post"] as? String ?? "",
-                sectionLabel: dict["label"] as? String))
+                sectionLabel: dict["label"] as? String,
+                locator: Locator(spineIndex: 0, cfi: cfi, totalProgression: 0)))
         case "searchProgress":
             break // reserved for a progress UI; ignored in M3
         case "searchDone":

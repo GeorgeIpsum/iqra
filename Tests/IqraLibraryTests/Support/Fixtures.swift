@@ -98,6 +98,25 @@ enum Fixtures {
         return url
     }
 
+    /// A CBZ with an optional ComicInfo.xml `<Title>` and one or more page images
+    /// (real JPEG bytes, so ThumbnailPipeline can decode the extracted cover).
+    static func makeCBZ(comicInfoTitle: String? = nil, pageImages: [Data] = [Fixtures.tinyJPEG()],
+                        dir: URL) throws -> URL {
+        let url = dir.appendingPathComponent(UUID().uuidString + ".cbz")
+        let archive = try Archive(url: url, accessMode: .create, pathEncoding: nil)
+        func add(_ name: String, _ data: Data) throws {
+            try archive.addEntry(with: name, type: .file, uncompressedSize: Int64(data.count),
+                                 provider: { p, s in data.subdata(in: Int(p)..<Int(p) + s) })
+        }
+        if let comicInfoTitle {
+            try add("ComicInfo.xml", Data("<ComicInfo><Title>\(comicInfoTitle)</Title></ComicInfo>".utf8))
+        }
+        for (i, image) in pageImages.enumerated() {
+            try add(String(format: "page%03d.jpg", i), image)
+        }
+        return url
+    }
+
     static func makePDF(title: String?, author: String?, password: String? = nil, dir: URL) throws -> URL {
         let url = dir.appendingPathComponent(UUID().uuidString + ".pdf")
         var mediaBox = CGRect(x: 0, y: 0, width: 200, height: 300)

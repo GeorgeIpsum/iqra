@@ -26,7 +26,7 @@ struct ReaderScreen: View {
     @State private var containerSize = CGSize(width: CGFloat.infinity, height: CGFloat.infinity)
 
     var body: some View {
-        WebViewContainer(webView: model.navigator.webView)
+        readerSurface
             .ignoresSafeArea(edges: .bottom)
             .background(GeometryReader { proxy in
                 Color.clear.preference(key: SizePreferenceKey.self, value: proxy.size)
@@ -43,8 +43,12 @@ struct ReaderScreen: View {
                     Button("Next", systemImage: "chevron.right") { model.navigator.next() }
                     Button("Contents", systemImage: "list.bullet") { showTOC = true }
                         .disabled(model.toc.isEmpty)
-                    Button("Find", systemImage: "magnifyingglass") { showSearch = true }
-                    Button("Appearance", systemImage: "textformat.size") { showAppearance = true }
+                    if model.canSearch {
+                        Button("Find", systemImage: "magnifyingglass") { showSearch = true }
+                    }
+                    if model.canConfigureAppearance {
+                        Button("Appearance", systemImage: "textformat.size") { showAppearance = true }
+                    }
                     Button(model.isCurrentPositionBookmarked ? "Bookmarked" : "Bookmark",
                            systemImage: model.isCurrentPositionBookmarked ? "bookmark.fill" : "bookmark") {
                         model.toggleBookmarkAtCurrentPosition()
@@ -105,6 +109,18 @@ struct ReaderScreen: View {
             .onKeyPress(.leftArrow) { model.navigator.prev(); return .handled }
             .onKeyPress(.rightArrow) { model.navigator.next(); return .handled }
             #endif
+    }
+
+    @ViewBuilder private var readerSurface: some View {
+        if let epub = model.navigator as? EPUBNavigator {
+            WebViewContainer(webView: epub.webView)
+        } else if let pdf = model.navigator as? PDFNavigator {
+            PDFReaderView(navigator: pdf)
+        } else if let comic = model.navigator as? ComicNavigator {
+            ComicReaderView(navigator: comic)
+        } else {
+            ContentUnavailableView("Unsupported", systemImage: "book.closed")
+        }
     }
 }
 
@@ -182,7 +198,11 @@ private struct TOCLevel: View {
     var body: some View {
         ForEach(Array(items.enumerated()), id: \.offset) { _, item in
             Button(item.label) {
-                if let href = item.href { model.navigator.goTo(cfi: href) } // goTo accepts hrefs too
+                // TOC href format differs per navigator: EPUB hands back a file href/fragment
+                // (resolved via the cfi branch of goTo(locator:)), while PDF hands back the
+                // destination page index as a string (only spineIndex is honored). goToTOC(_:)
+                // tells the two apart with Int(href) and routes to the format-appropriate field.
+                model.goToTOC(item)
                 dismiss()
             }
             if let sub = item.subitems {

@@ -7,7 +7,7 @@ import IqraReader
 
 @Observable @MainActor
 final class ReaderViewModel: NavigatorDelegate {
-    let navigator: EPUBNavigator
+    let navigator: any Navigator
     private(set) var title: String?
     private(set) var toc: [TOCItem] = []
     private(set) var progressPercent: Int = 0
@@ -26,10 +26,15 @@ final class ReaderViewModel: NavigatorDelegate {
 
     var settings: ReaderSettings {
         didSet {
-            navigator.apply(settings: settings)
+            (navigator as? AppearanceConfigurable)?.apply(settings: settings)
             ReaderSettingsStore.save(settings)
         }
     }
+
+    // Capability flags for the UI (so ReaderScreen shows/hides chrome per navigator kind).
+    var canSelectText: Bool { navigator is TextSelectable }
+    var canSearch: Bool { navigator is Searchable }
+    var canConfigureAppearance: Bool { navigator is AppearanceConfigurable }
 
     private let bookID: UUID
     private let formatID: UUID
@@ -47,7 +52,7 @@ final class ReaderViewModel: NavigatorDelegate {
     private nonisolated(unsafe) var observationTask: Task<Void, Never>?
 
     init?(bookID: UUID, store: LibraryStore, readingState: ReadingStateStore,
-          annotationStore: AnnotationStore, paths: LibraryPaths) {
+          annotationStore: AnnotationStore, paths: LibraryPaths, caches: LibraryPaths.Caches) {
         guard let format = try? store.openableFormat(bookID: bookID),
               let formatUUID = UUID(uuidString: format.id),
               let type = FormatType(rawValue: format.formatType) else { return nil }
@@ -59,11 +64,11 @@ final class ReaderViewModel: NavigatorDelegate {
 
         let initial = (try? readingState.locatorJSON(bookID: bookID, formatID: formatUUID))
             .flatMap { try? Locator.from(jsonData: $0) }
-        self.navigator = EPUBNavigator(
-            bookID: bookID,
-            bookFileURL: paths.formatFile(bookID: bookID, formatID: formatUUID, type: type),
-            initialLocator: initial,
-            settings: ReaderSettingsStore.load())
+        guard let navigator = NavigatorFactory.make(
+            formatType: type, bookID: bookID, formatID: formatUUID,
+            formatURL: paths.formatFile(bookID: bookID, formatID: formatUUID, type: type),
+            initialLocator: initial, settings: ReaderSettingsStore.load(), caches: caches) else { return nil }
+        self.navigator = navigator
         navigator.delegate = self
         try? store.markOpened(bookID: bookID)
         startObservingAnnotations()
@@ -100,7 +105,8 @@ final class ReaderViewModel: NavigatorDelegate {
 
     private func pushAnnotationsToReader(_ annotations: [Annotation]) {
         // Idempotent: the bridge keys overlays by CFI, so re-adding is a redraw, not a dupe.
-        for a in annotations where a.kind != .bookmark { navigator.addAnnotation(a) }
+        guard let annotatable = navigator as? RangeAnnotatable else { return }
+        for a in annotations where a.kind != .bookmark { annotatable.addAnnotation(a) }
     }
 
     static func annotation(from r: AnnotationRecord) -> Annotation? {
@@ -139,8 +145,8 @@ final class ReaderViewModel: NavigatorDelegate {
 
     func navigator(didChangeSelection selection: SelectionInfo?) { currentSelection = selection }
 
-    func navigator(didTapAnnotation cfi: String) {
-        activeAnnotation = annotations.first { $0.locator.cfi == cfi }
+    func navigator(didTapAnnotation id: UUID) {
+        activeAnnotation = annotations.first { $0.id == id }
     }
 
     /// Clears the active annotation, e.g. when the note editor sheet is dismissed by the
@@ -157,30 +163,33 @@ final class ReaderViewModel: NavigatorDelegate {
     // MARK: Intents
 
     func runSearch() {
+        guard let searchable = navigator as? Searchable else { return }
         let q = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !q.isEmpty else { clearSearch(); return }
         searchHits = []; isSearching = true
-        navigator.search(query: q)
+        searchable.search(query: q)
     }
 
     func clearSearch() {
         searchHits = []; isSearching = false; searchQuery = ""
-        navigator.clearSearch()
+        (navigator as? Searchable)?.clearSearch()
     }
 
-    func goToHit(_ hit: SearchHit) { navigator.goTo(cfi: hit.cfi) }
+    func goToHit(_ hit: SearchHit) {
+        navigator.goTo(locator: hit.locator)
+    }
 
-    func clearSelection() { currentSelection = nil; navigator.deselect() }
+    func clearSelection() { currentSelection = nil; (navigator as? TextSelectable)?.deselect() }
 
+    // `sel.locator` is the selection's own format-neutral locator (EPUB: cfi+textContext; PDF:
+    // spineIndex+pageQuads+textQuote) — one path builds a highlight `Annotation` for both.
     func createHighlight(color: HighlightColor) {
         guard let sel = currentSelection else { return }
-        let locator = Locator(spineIndex: sel.spineIndex, cfi: sel.cfi,
-                              totalProgression: sel.totalProgression, textContext: sel.textContext)
-        let annotation = Annotation(id: UUID(), kind: .highlight, locator: locator, color: color,
+        let annotation = Annotation(id: UUID(), kind: .highlight, locator: sel.locator, color: color,
                                     note: nil, createdAt: Date(), modifiedAt: Date())
         do {
             try persist(annotation)
-            navigator.addAnnotation(annotation)
+            (navigator as? RangeAnnotatable)?.addAnnotation(annotation)
         } catch {
             readerError = "Couldn't save highlight: \(error)"
         }
@@ -204,7 +213,7 @@ final class ReaderViewModel: NavigatorDelegate {
         var updated = annotation; updated.color = color; updated.modifiedAt = Date()
         do {
             try persist(updated)
-            navigator.addAnnotation(updated)   // redraw in place (same CFI key)
+            (navigator as? RangeAnnotatable)?.addAnnotation(updated)   // redraw in place (same anchor key)
             if activeAnnotation?.id == annotation.id { activeAnnotation = updated }
         } catch {
             readerError = "Couldn't save highlight color: \(error)"
@@ -214,16 +223,28 @@ final class ReaderViewModel: NavigatorDelegate {
     func deleteAnnotation(_ annotation: Annotation) {
         do {
             try annotationStore.delete(id: annotation.id)
-            if let cfi = annotation.locator.cfi { navigator.removeAnnotation(cfi: cfi) }
+            (navigator as? RangeAnnotatable)?.removeAnnotation(annotation)
             if activeAnnotation?.id == annotation.id { activeAnnotation = nil }
         } catch {
             readerError = "Couldn't delete highlight: \(error)"
         }
     }
 
-    func goTo(_ annotation: Annotation) {
-        if let cfi = annotation.locator.cfi { navigator.goTo(cfi: cfi) }
-        else { navigator.goTo(fraction: annotation.locator.totalProgression) }
+    func goTo(_ annotation: Annotation) { navigator.goTo(locator: annotation.locator) }
+
+    // A TOC entry's `href` means different things per format: EPUB's is a file path/fragment
+    // (e.g. "ch1.xhtml#x") that only EPUBNavigator.goTo(locator:) can resolve, via its cfi
+    // branch; PDF's is a stringified destination page index (from PDFNavigator.toc(from:)),
+    // and PDFNavigator.goTo(locator:) reads only spineIndex, ignoring cfi entirely. The two
+    // formats are disjoint — an EPUB href is never a bare integer — so `Int(href)` reliably
+    // tells us which one we're looking at and lets one method route correctly for both.
+    func goToTOC(_ item: TOCItem) {
+        guard let href = item.href else { return }
+        if let page = Int(href) {
+            navigator.goTo(locator: Locator(spineIndex: page, cfi: nil, totalProgression: 0))
+        } else {
+            navigator.goTo(locator: Locator(spineIndex: 0, cfi: href, totalProgression: 0))
+        }
     }
 
     // MARK: Bookmarks
@@ -237,19 +258,19 @@ final class ReaderViewModel: NavigatorDelegate {
     // idempotency by CFI) DB-true instead of cache-true. Reusing this existing store method
     // (rather than adding a new boolean-only `bookmarkExists`) also hands back the persisted
     // annotation itself, which the delete path needs anyway.
-    private func bookmarkedAnnotation(at cfi: String) -> Annotation? {
+    private func bookmarkedAnnotation(at key: String) -> Annotation? {
         let fresh = (try? annotationStore.annotations(bookID: bookID, formatID: formatID)) ?? []
-        return fresh.compactMap(Self.annotation(from:)).first { $0.kind == .bookmark && $0.locator.cfi == cfi }
+        return fresh.compactMap(Self.annotation(from:)).first { $0.kind == .bookmark && $0.locator.anchorKey == key }
     }
 
     var isCurrentPositionBookmarked: Bool {
-        guard let cfi = lastLocator?.cfi else { return false }
-        return annotations.contains { $0.kind == .bookmark && $0.locator.cfi == cfi }
+        guard let key = lastLocator?.anchorKey else { return false }
+        return annotations.contains { $0.kind == .bookmark && $0.locator.anchorKey == key }
     }
 
     func toggleBookmarkAtCurrentPosition() {
-        guard let locator = lastLocator, let cfi = locator.cfi else { return }
-        if let existing = bookmarkedAnnotation(at: cfi) {
+        guard let locator = lastLocator else { return }
+        if let existing = bookmarkedAnnotation(at: locator.anchorKey) {
             deleteAnnotation(existing)
         } else {
             do {

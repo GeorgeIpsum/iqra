@@ -12,20 +12,29 @@ public struct Locator: Codable, Equatable, Sendable {
     public var totalProgression: Double
     public var tocLabel: String?
     public var textContext: TextContext?
+    public var pageQuads: [[Double]]?   // PDF highlight quads (page space), each [x0,y0,x1,y1,x2,y2,x3,y3]
 
     public init(spineIndex: Int, spineHref: String? = nil, cfi: String? = nil,
                 progressionInChapter: Double? = nil, totalProgression: Double,
-                tocLabel: String? = nil, textContext: TextContext? = nil) {
+                tocLabel: String? = nil, textContext: TextContext? = nil,
+                pageQuads: [[Double]]? = nil) {
         self.spineIndex = spineIndex; self.spineHref = spineHref; self.cfi = cfi
         self.progressionInChapter = progressionInChapter
         self.totalProgression = totalProgression; self.tocLabel = tocLabel
         self.textContext = textContext
+        self.pageQuads = pageQuads
     }
 
     public func jsonData() throws -> Data { try JSONEncoder().encode(self) }
     public static func from(jsonData: Data) throws -> Locator {
         try JSONDecoder().decode(Locator.self, from: jsonData)
     }
+}
+
+public extension Locator {
+    /// Format-neutral identity for "same position" (bookmark dedupe, goTo). EPUB uses the CFI;
+    /// PDF/comics have no CFI and use the page index.
+    var anchorKey: String { cfi ?? "page:\(spineIndex)" }
 }
 
 public struct TextContext: Codable, Equatable, Sendable {
@@ -84,10 +93,14 @@ public struct SelectionInfo: Codable, Equatable, Sendable {
     public var spineIndex: Int
     public var totalProgression: Double
     public var textContext: TextContext?
+    /// Format-neutral navigation/anchor target for this selection (EPUB: cfi + textContext;
+    /// PDF: pageQuads) so the app can build a highlight `Annotation` uniformly from either.
+    public var locator: Locator
     public init(text: String, cfi: String, rect: SelectionRect, spineIndex: Int,
-                totalProgression: Double, textContext: TextContext?) {
+                totalProgression: Double, textContext: TextContext?, locator: Locator) {
         self.text = text; self.cfi = cfi; self.rect = rect; self.spineIndex = spineIndex
         self.totalProgression = totalProgression; self.textContext = textContext
+        self.locator = locator
     }
 }
 
@@ -98,10 +111,13 @@ public struct SearchHit: Codable, Equatable, Sendable, Identifiable {
     public var excerptMatch: String
     public var excerptPost: String
     public var sectionLabel: String?
+    /// Format-neutral navigation target for this hit (spec: UI navigates any hit uniformly,
+    /// never re-derives a locator from the cfi itself).
+    public var locator: Locator
     public init(cfi: String, excerptPre: String, excerptMatch: String, excerptPost: String,
-                sectionLabel: String?) {
+                sectionLabel: String?, locator: Locator) {
         self.cfi = cfi; self.excerptPre = excerptPre; self.excerptMatch = excerptMatch
-        self.excerptPost = excerptPost; self.sectionLabel = sectionLabel
+        self.excerptPost = excerptPost; self.sectionLabel = sectionLabel; self.locator = locator
     }
 }
 

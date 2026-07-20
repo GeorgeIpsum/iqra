@@ -25,7 +25,10 @@ let package = Package(
         ),
         .target(
             name: "IqraReader",
-            dependencies: ["IqraCore"],
+            dependencies: [
+                "IqraCore",
+                .product(name: "ZIPFoundation", package: "ZIPFoundation"),
+            ],
             resources: [
                 .copy("Vendor"),
                 .copy("ReaderAssets"),

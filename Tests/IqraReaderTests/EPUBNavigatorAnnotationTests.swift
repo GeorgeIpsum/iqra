@@ -8,7 +8,7 @@ import ZIPFoundation
 private final class AnnRecorder: NavigatorDelegate {
     var loaded = false
     var selections: [SelectionInfo?] = []
-    var tapped: [String] = []
+    var tapped: [UUID] = []
     var onLoad: (() -> Void)?
     var onSelect: (() -> Void)?
     var onTap: (() -> Void)?
@@ -16,7 +16,7 @@ private final class AnnRecorder: NavigatorDelegate {
     func navigator(didRelocate locator: Locator) {}
     func navigator(didFail message: String) { XCTFail("reader error: \(message)") }
     func navigator(didChangeSelection selection: SelectionInfo?) { selections.append(selection); onSelect?() }
-    func navigator(didTapAnnotation cfi: String) { tapped.append(cfi); onTap?() }
+    func navigator(didTapAnnotation id: UUID) { tapped.append(id); onTap?() }
 }
 
 final class EPUBNavigatorAnnotationTests: XCTestCase {
@@ -115,7 +115,7 @@ final class EPUBNavigatorAnnotationTests: XCTestCase {
     }
 
     @MainActor
-    func testAddAnnotationDrawsAndTapReportsCFI() async throws {
+    func testAddAnnotationDrawsAndTapReportsID() async throws {
         let rec = AnnRecorder(); let nav = try makeNavigator(rec)
         let loaded = expectation(description: "loaded"); rec.onLoad = { loaded.fulfill() }
         nav.start(); await fulfillment(of: [loaded], timeout: 30)
@@ -145,9 +145,11 @@ final class EPUBNavigatorAnnotationTests: XCTestCase {
             """) as? Int
         let beforeCount = try XCTUnwrap(initialOverlayChildCount)
 
-        nav.addAnnotation(Annotation(id: UUID(), kind: .highlight,
-                                     locator: Locator(spineIndex: 0, cfi: annotationCFI, totalProgression: 0.1),
-                                     color: .yellow, note: nil, createdAt: Date(), modifiedAt: Date()))
+        let id = UUID()
+        let annotation = Annotation(id: id, kind: .highlight,
+                                    locator: Locator(spineIndex: 0, cfi: annotationCFI, totalProgression: 0.1),
+                                    color: .yellow, note: nil, createdAt: Date(), modifiedAt: Date())
+        nav.addAnnotation(annotation)
 
         var afterCount = beforeCount
         for _ in 0..<100 {
@@ -168,9 +170,9 @@ final class EPUBNavigatorAnnotationTests: XCTestCase {
             true
             """)
         await fulfillment(of: [tapped], timeout: 30)
-        XCTAssertEqual(rec.tapped.last, annotationCFI)
+        XCTAssertEqual(rec.tapped.last, id)
 
-        nav.removeAnnotation(cfi: annotationCFI) // must not throw / error
+        nav.removeAnnotation(annotation) // must not throw / error
     }
 
     /// Fix 6: proves the `create-overlay` re-add mechanism actually redraws an annotation
