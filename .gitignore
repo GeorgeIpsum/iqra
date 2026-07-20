@@ -3,3 +3,4 @@ node_modules
 .superpowers/
 .build/
 App/iqra.xcodeproj
+.swiftpm/
