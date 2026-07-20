@@ -64,17 +64,22 @@ public final class ImportPipeline {
         do {
             // 1. sniff — magic bytes, never extension
             guard case let .recognized(formatType) = try FormatSniffer.sniff(fileURL: url),
-                  formatType == .epub || formatType == .pdf else {
-                // cbz/cbr/mobi arrive in M4/M5; everything unrecognized or not-yet-supported quarantines
+                  formatType == .epub || formatType == .pdf || formatType == .cbz else {
+                // cbr/mobi arrive in a later milestone; everything unrecognized or
+                // not-yet-supported quarantines
                 try upsertImportItem(id: itemID, path: url.path, status: "quarantined",
                                      rejection: .unsupportedFormat, bookId: nil)
                 return .quarantined(.unsupportedFormat)
             }
 
             // 2–4. classify + extract metadata + cover (native, local-only)
-            let extraction = formatType == .epub
-                ? EPUBMetadataExtractor.extract(fileURL: url)
-                : PDFMetadataExtractor.extract(fileURL: url)
+            let extraction: ExtractionResult
+            switch formatType {
+            case .epub: extraction = EPUBMetadataExtractor.extract(fileURL: url)
+            case .pdf: extraction = PDFMetadataExtractor.extract(fileURL: url)
+            case .cbz: extraction = ComicMetadataExtractor.extract(fileURL: url, formatType: formatType)
+            case .cbr, .mobi: fatalError("unreachable: sniff only recognizes epub/pdf/cbz here")
+            }
             guard case let .extracted(metadata, coverData) = extraction else {
                 guard case let .rejected(reason) = extraction else { fatalError("unreachable") }
                 try upsertImportItem(id: itemID, path: url.path, status: "quarantined",

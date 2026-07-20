@@ -32,6 +32,12 @@ public struct LibraryPaths: Sendable {
             root.appendingPathComponent("thumbnails", isDirectory: true)
                 .appendingPathComponent("\(bookID.uuidString)-\(size.rawValue).jpg")
         }
+        /// Evictable cache dir for a comic format's extracted pages (spec: CBZ pages are
+        /// extracted once into a cache, not stored in the managed library tree).
+        public func comicPagesDir(formatID: UUID) -> URL {
+            root.appendingPathComponent("comics", isDirectory: true)
+                .appendingPathComponent(formatID.uuidString, isDirectory: true)
+        }
     }
 }
 
