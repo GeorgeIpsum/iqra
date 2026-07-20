@@ -107,10 +107,13 @@ public struct SearchHit: Codable, Equatable, Sendable, Identifiable {
     public var excerptMatch: String
     public var excerptPost: String
     public var sectionLabel: String?
+    /// Format-neutral navigation target for this hit (spec: UI navigates any hit uniformly,
+    /// never re-derives a locator from the cfi itself).
+    public var locator: Locator
     public init(cfi: String, excerptPre: String, excerptMatch: String, excerptPost: String,
-                sectionLabel: String?) {
+                sectionLabel: String?, locator: Locator) {
         self.cfi = cfi; self.excerptPre = excerptPre; self.excerptMatch = excerptMatch
-        self.excerptPost = excerptPost; self.sectionLabel = sectionLabel
+        self.excerptPost = excerptPost; self.sectionLabel = sectionLabel; self.locator = locator
     }
 }
 

@@ -187,7 +187,8 @@ public final class EPUBNavigator: NSObject, Navigator, AppearanceConfigurable, T
                 excerptPre: ex?["pre"] as? String ?? "",
                 excerptMatch: ex?["match"] as? String ?? "",
                 excerptPost: ex?["post"] as? String ?? "",
-                sectionLabel: dict["label"] as? String))
+                sectionLabel: dict["label"] as? String,
+                locator: Locator(spineIndex: 0, cfi: cfi, totalProgression: 0)))
         case "searchProgress":
             break // reserved for a progress UI; ignored in M3
         case "searchDone":
