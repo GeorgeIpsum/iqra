@@ -12,6 +12,7 @@ import PDFKit
     private let document: PDFDocument
     private let initialLocator: Locator?
     private var pageObserver: NSObjectProtocol?
+    private var searchTask: Task<Void, Never>?
 
     public var pageCount: Int { document.pageCount }
 
@@ -90,36 +91,53 @@ extension PDFNavigator: Searchable {
         clearSearch()
         let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !q.isEmpty else { delegate?.navigatorDidFinishSearch(); return }
-        // Synchronous findString is fine for reader-sized PDFs; run off the current runloop tick
-        // so the caller (UI) isn't blocked, and to mirror the async feel of the EPUB search.
-        Task { @MainActor in
+        // Synchronous findString is fine for reader-sized PDFs. Once this Task's body starts
+        // running, findString executes synchronously on the main thread like any other call —
+        // wrapping it in a Task only defers the *start* past the current runloop tick (so
+        // `search()` itself returns immediately) and mirrors the async feel of the EPUB search.
+        searchTask = Task { @MainActor in
             let selections = document.findString(q, withOptions: [.caseInsensitive, .diacriticInsensitive])
             var drawn: [PDFSelection] = []
-            for sel in selections {
+            var pageTextCache: [Int: String] = [:]
+            var cursors: [Int: String.Index] = [:]
+            for (ordinal, sel) in selections.enumerated() {
+                if Task.isCancelled { return }
                 guard let page = sel.pages.first else { continue }
                 let idx = document.index(for: page)
                 let match = sel.string ?? q
-                let excerpt = Self.excerpt(around: sel, on: page, match: match)
+                if pageTextCache[idx] == nil { pageTextCache[idx] = page.string }
+                let excerpt = Self.excerpt(in: pageTextCache[idx], match: match, searchFrom: cursors[idx])
+                if let next = excerpt.next { cursors[idx] = next }
                 sel.color = .yellow; drawn.append(sel)
                 delegate?.navigator(didFindSearchHit: SearchHit(
-                    cfi: "pdf:\(idx):\(sel.string ?? "")",   // stable-ish id for the list
+                    cfi: "pdf:\(ordinal):\(idx)",   // globally unique per search: ordinal over all selections
                     excerptPre: excerpt.pre, excerptMatch: match, excerptPost: excerpt.post,
                     sectionLabel: nil,
                     locator: Self.pageLocator(pageIndex: idx, pageCount: document.pageCount, tocLabel: nil)))
             }
+            guard !Task.isCancelled else { return }
             pdfView.highlightedSelections = drawn.isEmpty ? nil : drawn
             delegate?.navigatorDidFinishSearch()
         }
     }
 
-    public func clearSearch() { pdfView.highlightedSelections = nil }
+    public func clearSearch() {
+        searchTask?.cancel()
+        pdfView.highlightedSelections = nil
+    }
 
-    /// ~40 chars of page text on either side of the match for the results list.
-    private static func excerpt(around selection: PDFSelection, on page: PDFPage,
-                                match: String) -> (pre: String, post: String) {
-        guard let pageText = page.string, let r = pageText.range(of: match) else { return ("", "") }
+    /// ~40 chars of page text on either side of the match for the results list. `searchFrom`
+    /// advances past prior occurrences on the same page so each hit gets the excerpt for its
+    /// own occurrence rather than always the first one; `next` is where the following search
+    /// on this page should resume from. Falls back to empty pre/post if the match can't be
+    /// located (e.g. selection text disagrees with page.string extraction).
+    private static func excerpt(in pageText: String?, match: String,
+                                searchFrom start: String.Index?) -> (pre: String, post: String, next: String.Index?) {
+        guard let pageText,
+              let r = pageText.range(of: match, options: [], range: (start ?? pageText.startIndex)..<pageText.endIndex)
+        else { return ("", "", nil) }
         let preStart = pageText.index(r.lowerBound, offsetBy: -40, limitedBy: pageText.startIndex) ?? pageText.startIndex
         let postEnd = pageText.index(r.upperBound, offsetBy: 40, limitedBy: pageText.endIndex) ?? pageText.endIndex
-        return (String(pageText[preStart..<r.lowerBound]), String(pageText[r.upperBound..<postEnd]))
+        return (String(pageText[preStart..<r.lowerBound]), String(pageText[r.upperBound..<postEnd]), r.upperBound)
     }
 }
