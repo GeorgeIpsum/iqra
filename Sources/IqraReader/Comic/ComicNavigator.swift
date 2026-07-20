@@ -21,19 +21,25 @@ import Observation
     }
 
     public func start() {
+        Task { [weak self] in await self?.loadAndStart() }
+    }
+
+    private func loadAndStart() async {
+        let cbz = comicFileURL
+        let dir = cacheDir
         let manifest: ComicManifest
         do {
-            if let loaded = ComicExtractor.loadManifest(from: cacheDir) {
-                manifest = loaded
-            } else {
-                manifest = try ComicExtractor.extractCBZ(cbzURL: comicFileURL, into: cacheDir)
-            }
+            manifest = try await Task.detached {
+                if let loaded = ComicExtractor.loadManifest(from: dir) { return loaded }
+                return try ComicExtractor.extractCBZ(cbzURL: cbz, into: dir)
+            }.value
         } catch {
-            delegate?.navigator(didFail: "Couldn't open comic: \(error)"); return
+            delegate?.navigator(didFail: "Couldn't open comic: \(error)")
+            return
         }
         readingDirection = manifest.readingDirection
-        pages = manifest.pages.map { PageRef(index: $0.index, url: cacheDir.appendingPathComponent($0.fileName)) }
-        delegate?.navigatorDidLoad(title: comicFileURL.deletingPathExtension().lastPathComponent, toc: [])
+        pages = manifest.pages.map { PageRef(index: $0.index, url: dir.appendingPathComponent($0.fileName)) }
+        delegate?.navigatorDidLoad(title: cbz.deletingPathExtension().lastPathComponent, toc: [])
         let restore = min(max(0, initialLocator?.spineIndex ?? 0), max(0, pages.count - 1))
         currentIndex = restore
         if restore == 0 { emitRelocate() }   // didSet already emitted for a non-zero restore; only page 0 (0→0) needs the explicit call
