@@ -171,9 +171,13 @@ public final class EPUBNavigator: NSObject, Navigator, AppearanceConfigurable, T
                                       after: tc["after"] as? String ?? "")
             }
             let progression = dict["totalProgression"] as? Double ?? 0
+            let spineIndex = dict["spineIndex"] as? Int ?? 0
+            let clampedProgression = progression.isFinite ? progression : 0
+            let locator = Locator(spineIndex: spineIndex, cfi: cfi,
+                                  totalProgression: clampedProgression, textContext: context)
             delegate?.navigator(didChangeSelection: SelectionInfo(
-                text: text, cfi: cfi, rect: selRect, spineIndex: dict["spineIndex"] as? Int ?? 0,
-                totalProgression: progression.isFinite ? progression : 0, textContext: context))
+                text: text, cfi: cfi, rect: selRect, spineIndex: spineIndex,
+                totalProgression: clampedProgression, textContext: context, locator: locator))
         case "selectionCleared":
             delegate?.navigator(didChangeSelection: nil)
         case "annotationTapped":

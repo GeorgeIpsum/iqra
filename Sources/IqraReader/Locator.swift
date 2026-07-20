@@ -93,10 +93,14 @@ public struct SelectionInfo: Codable, Equatable, Sendable {
     public var spineIndex: Int
     public var totalProgression: Double
     public var textContext: TextContext?
+    /// Format-neutral navigation/anchor target for this selection (EPUB: cfi + textContext;
+    /// PDF: pageQuads) so the app can build a highlight `Annotation` uniformly from either.
+    public var locator: Locator
     public init(text: String, cfi: String, rect: SelectionRect, spineIndex: Int,
-                totalProgression: Double, textContext: TextContext?) {
+                totalProgression: Double, textContext: TextContext?, locator: Locator) {
         self.text = text; self.cfi = cfi; self.rect = rect; self.spineIndex = spineIndex
         self.totalProgression = totalProgression; self.textContext = textContext
+        self.locator = locator
     }
 }
 

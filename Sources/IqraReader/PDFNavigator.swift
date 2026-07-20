@@ -1,11 +1,17 @@
 // Sources/IqraReader/PDFNavigator.swift
 import Foundation
 import PDFKit
+#if os(iOS)
+import UIKit
+#else
+import AppKit
+#endif
 
 /// PDFKit-backed navigator. The app hosts `pdfView` in a representable; all durable state
 /// (position, annotations) is the caller's responsibility — the navigator reports position
 /// via the delegate and never mutates the source file.
-@MainActor public final class PDFNavigator: NSObject, Navigator {
+@MainActor public final class PDFNavigator: NSObject, Navigator, TextSelectable, RangeAnnotatable,
+                                             AppearanceConfigurable {
     public let pdfView = PDFView()
     public weak var delegate: NavigatorDelegate?
 
@@ -13,6 +19,10 @@ import PDFKit
     private let initialLocator: Locator?
     private var pageObserver: NSObjectProtocol?
     private var searchTask: Task<Void, Never>?
+    private var selectionObserver: NSObjectProtocol?
+    /// id -> the PDFAnnotations drawn for it (one per quad/line), so removeAnnotation and the
+    /// tap hit-test can find/reverse-look-up them. In-memory only — never written to the file.
+    private var pdfAnnotationsByID: [UUID: [PDFAnnotation]] = [:]
 
     public var pageCount: Int { document.pageCount }
 
@@ -43,6 +53,11 @@ import PDFKit
             forName: .PDFViewPageChanged, object: pdfView, queue: .main) { [weak self] _ in
             Task { @MainActor in self?.emitRelocate() }
         }
+        selectionObserver = NotificationCenter.default.addObserver(
+            forName: .PDFViewSelectionChanged, object: pdfView, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.emitSelection() }
+        }
+        installTapGesture()
     }
 
     public func goTo(locator: Locator) {
@@ -58,6 +73,61 @@ import PDFKit
         let idx = document.index(for: current)
         delegate?.navigator(didRelocate: Self.pageLocator(pageIndex: idx, pageCount: document.pageCount,
                                                           tocLabel: nil))
+    }
+
+    /// Reports the current text selection (or nil once cleared) via the delegate, carrying a
+    /// full `Locator` (page index + page-space quads + the selected text) so the app can build
+    /// a highlight `Annotation` from it uniformly with the EPUB path.
+    private func emitSelection() {
+        guard let sel = pdfView.currentSelection, !(sel.string ?? "").isEmpty,
+              let anchor = PDFAnnotationMapping.anchor(from: sel, in: document),
+              let page = sel.pages.first else { delegate?.navigator(didChangeSelection: nil); return }
+        // rect for the popover: union of line bounds → view space
+        let pageRect = sel.bounds(for: page)
+        let viewRect = pdfView.convert(pageRect, from: page)
+        let textContext = TextContext(before: "", highlight: anchor.textQuote, after: "")
+        let locator = Locator(spineIndex: anchor.pageIndex, cfi: nil,
+                              totalProgression: Self.pageLocator(pageIndex: anchor.pageIndex,
+                                  pageCount: document.pageCount, tocLabel: nil).totalProgression,
+                              textContext: textContext, pageQuads: anchor.quads)
+        delegate?.navigator(didChangeSelection: SelectionInfo(
+            text: anchor.textQuote, cfi: "",
+            rect: SelectionRect(x: Double(viewRect.minX), y: Double(viewRect.minY),
+                width: Double(viewRect.width), height: Double(viewRect.height)),
+            spineIndex: anchor.pageIndex, totalProgression: locator.totalProgression,
+            textContext: textContext, locator: locator))
+    }
+
+    /// Tap hit-test: resolve a tap on `pdfView` to a page point, then to a PDFAnnotation, then
+    /// (if it's one we drew) to its stored id for `delegate?.navigator(didTapAnnotation:)`.
+    private func installTapGesture() {
+        #if os(iOS)
+        let tap = UITapGestureRecognizer(target: self, action: #selector(handleTap(_:)))
+        pdfView.addGestureRecognizer(tap)
+        #else
+        let click = NSClickGestureRecognizer(target: self, action: #selector(handleTap(_:)))
+        pdfView.addGestureRecognizer(click)
+        #endif
+    }
+
+    #if os(iOS)
+    @objc private func handleTap(_ gesture: UITapGestureRecognizer) {
+        resolveTap(at: gesture.location(in: pdfView))
+    }
+    #else
+    @objc private func handleTap(_ gesture: NSClickGestureRecognizer) {
+        resolveTap(at: gesture.location(in: pdfView))
+    }
+    #endif
+
+    private func resolveTap(at point: CGPoint) {
+        guard let page = pdfView.page(for: point, nearest: true) else { return }
+        let pagePoint = pdfView.convert(point, to: page)
+        guard let hit = page.annotation(at: pagePoint) else { return }
+        for (id, anns) in pdfAnnotationsByID where anns.contains(where: { $0 === hit }) {
+            delegate?.navigator(didTapAnnotation: id)
+            return
+        }
     }
 
     public nonisolated static func pageLocator(pageIndex: Int, pageCount: Int, tocLabel: String?) -> Locator {
@@ -83,7 +153,41 @@ import PDFKit
         return children(of: root)
     }
 
-    deinit { if let o = pageObserver { NotificationCenter.default.removeObserver(o) } }
+    deinit {
+        if let o = pageObserver { NotificationCenter.default.removeObserver(o) }
+        if let o = selectionObserver { NotificationCenter.default.removeObserver(o) }
+    }
+}
+
+extension PDFNavigator {
+    public func deselect() { pdfView.clearSelection() }
+}
+
+extension PDFNavigator {
+    /// Draws one `.highlight` PDFAnnotation per stored quad directly on the in-memory
+    /// `PDFPage` — this mutates the `PDFDocument` object graph only; the source file on disk
+    /// is never touched (no `document.write` anywhere in this navigator).
+    public func addAnnotation(_ annotation: Annotation) {
+        removeAnnotation(annotation)   // idempotent redraw
+        guard let quads = annotation.locator.pageQuads,
+              let page = document.page(at: annotation.locator.spineIndex) else { return }
+        let anns = PDFAnnotationMapping.highlightAnnotations(
+            quads: quads, colorHex: annotation.color?.cssColor ?? "#F7D774")
+        for a in anns { page.addAnnotation(a) }
+        pdfAnnotationsByID[annotation.id] = anns
+    }
+
+    public func removeAnnotation(_ annotation: Annotation) {
+        guard let anns = pdfAnnotationsByID.removeValue(forKey: annotation.id) else { return }
+        for a in anns { a.page?.removeAnnotation(a) }
+    }
+}
+
+extension PDFNavigator {
+    public func apply(settings: ReaderSettings) {
+        pdfView.backgroundColor = PlatformColor(hex: settings.theme.background)
+        // (Page inversion for a true dark PDF is a PDFPage.draw override — deferred; background only.)
+    }
 }
 
 extension PDFNavigator: Searchable {
