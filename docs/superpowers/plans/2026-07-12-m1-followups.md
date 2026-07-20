@@ -101,14 +101,21 @@ delete error surfacing, search-spinner reset on error, selection-bar edge
 clamp, NoteEditor accessibility, tombstone + cross-section-overlay tests).
 These remain open:
 
-- **M4 PRE-WORK (do BEFORE the PDF/comics navigators): capability-protocol
+- ~~**M4 PRE-WORK (do BEFORE the PDF/comics navigators): capability-protocol
   split.** The spec mandates a base `Navigator` + `TextSelectable`/
   `RangeAnnotatable`/`Searchable` capability protocols so the UI can't offer
   highlighting on a CBZ page. M1–M3 put everything on one flat
   `NavigatorDelegate` + concrete `EPUBNavigator`. This must land before M4
   adds non-text navigators, not with them. Also fix the stale
   `NavigatorProtocols.swift` comment promising capability protocols "arrive
-  with their features in M3/M4" — M3's features arrived without them.
+  with their features in M3/M4" — M3's features arrived without them.~~
+  **DONE (M4)** — `38d97e3` (base `Navigator` + `TextSelectable`/
+  `RangeAnnotatable`/`Searchable`/`AppearanceConfigurable` capability
+  protocols; stale `NavigatorProtocols.swift` comment fixed), `288b07e`
+  (format-neutral `ReaderViewModel` drives navigators by capability check).
+  `EPUBNavigator` conforms to all four (M4 Task 1); PDF conforms to all
+  four (M4 Task 3); `ComicNavigator` is base-only, as designed — CBZ pages
+  aren't text-selectable, searchable, or annotatable (M4 Tasks 7–9).
 - **Search-hit flood:** the bridge posts one message per hit and each does an
   @Observable List append; a common word in a full book = thousands of IPC
   round-trips + list diffs. foliate already yields hits batched per section
@@ -135,6 +142,30 @@ These remain open:
   method would hide `DatabaseManager`); dead `currentIndex` var in bridge.js
   (fix opportunistically); keyboard (Shift+Arrow) selection unreported
   (accessibility pass).
+
+## Deferred from M4 (branch m4-pdf-comics)
+
+M4 shipped the capability-protocol split (base `Navigator` +
+`TextSelectable`/`RangeAnnotatable`/`Searchable`/`AppearanceConfigurable`),
+PDFKit-backed PDF reading (read, two-page spread, outline TOC, search, text
+highlights + notes, bookmarks), and CBZ comics (paged image viewer,
+position, bookmarks) via a format-agnostic extract-to-cache + memory-
+windowed pager. These remain open:
+
+- **CBR (comic format):** the remaining comic archive format. Needs a
+  vendored `Unrar.swift`, a non-OSI UnRAR license acknowledgment, and
+  sequential (non-random-access) extraction — unlike CBZ's ZIP path, RAR
+  doesn't support cheap random-access reads. The viewer/cache/model layers
+  are already format-agnostic, so this is a clean later add, not a
+  redesign.
+- **MOBI:** still open, targeted for M5.
+- **PDF dark-mode page inversion:** deferred — dark mode currently only
+  swaps the reader chrome background, not the rendered page content (no
+  per-pixel inversion/recoloring of the PDF page itself).
+- **PDF two-page-spread settings toggle:** deferred — `PDFView.displayMode`
+  spread support exists and works, but there's no user-facing settings
+  control to switch it; wiring the toggle is UI polish, not a capability
+  gap.
 
 ## Smoke-test finding (2026-07-16): WKWebView needs the network-client entitlement
 
