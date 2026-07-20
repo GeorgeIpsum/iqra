@@ -202,13 +202,13 @@ extension LibraryStore {
     }
 
     /// The format the reader opens for this book: the first locally-present, non-deleted
-    /// EPUB. (Other format types get navigators in M4/M5.)
+    /// EPUB or PDF. (Comics are added in Task 9.)
     public func openableFormat(bookID: UUID) throws -> FormatRecord? {
         try dbm.writer.read { db in
             try FormatRecord.fetchOne(db, sql: """
                 SELECT f.* FROM format f
                 JOIN format_local fl ON fl.formatId = f.id
-                WHERE f.bookId = ? AND f.deleted = 0 AND f.formatType = 'epub' AND fl.present = 1
+                WHERE f.bookId = ? AND f.deleted = 0 AND f.formatType IN ('epub','pdf') AND fl.present = 1
                 ORDER BY f.addedAt ASC LIMIT 1
                 """, arguments: [bookID.uuidString])
         }

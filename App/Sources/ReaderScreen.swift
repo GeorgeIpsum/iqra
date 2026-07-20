@@ -26,16 +26,7 @@ struct ReaderScreen: View {
     @State private var containerSize = CGSize(width: CGFloat.infinity, height: CGFloat.infinity)
 
     var body: some View {
-        // TODO(Task 6): ReaderScreen hosts the right reader view per navigator kind (PDF/comic
-        // views land then). For now `NavigatorFactory` only ever builds an `EPUBNavigator`
-        // (openableFormat is epub-only until Phase B/C), so this downcast always succeeds.
-        Group {
-            if let webView = (model.navigator as? EPUBNavigator)?.webView {
-                WebViewContainer(webView: webView)
-            } else {
-                ContentUnavailableView("Unsupported format", systemImage: "exclamationmark.triangle")
-            }
-        }
+        readerSurface
             .ignoresSafeArea(edges: .bottom)
             .background(GeometryReader { proxy in
                 Color.clear.preference(key: SizePreferenceKey.self, value: proxy.size)
@@ -52,8 +43,12 @@ struct ReaderScreen: View {
                     Button("Next", systemImage: "chevron.right") { model.navigator.next() }
                     Button("Contents", systemImage: "list.bullet") { showTOC = true }
                         .disabled(model.toc.isEmpty)
-                    Button("Find", systemImage: "magnifyingglass") { showSearch = true }
-                    Button("Appearance", systemImage: "textformat.size") { showAppearance = true }
+                    if model.canSearch {
+                        Button("Find", systemImage: "magnifyingglass") { showSearch = true }
+                    }
+                    if model.canConfigureAppearance {
+                        Button("Appearance", systemImage: "textformat.size") { showAppearance = true }
+                    }
                     Button(model.isCurrentPositionBookmarked ? "Bookmarked" : "Bookmark",
                            systemImage: model.isCurrentPositionBookmarked ? "bookmark.fill" : "bookmark") {
                         model.toggleBookmarkAtCurrentPosition()
@@ -114,6 +109,16 @@ struct ReaderScreen: View {
             .onKeyPress(.leftArrow) { model.navigator.prev(); return .handled }
             .onKeyPress(.rightArrow) { model.navigator.next(); return .handled }
             #endif
+    }
+
+    @ViewBuilder private var readerSurface: some View {
+        if let epub = model.navigator as? EPUBNavigator {
+            WebViewContainer(webView: epub.webView)
+        } else if let pdf = model.navigator as? PDFNavigator {
+            PDFReaderView(navigator: pdf)
+        } else {
+            ContentUnavailableView("Unsupported", systemImage: "book.closed")
+        }
     }
 }
 

@@ -14,7 +14,9 @@ enum NavigatorFactory {
         case .epub, .mobi:   // MOBI renders through the same foliate engine (M5); EPUB today
             return EPUBNavigator(bookID: bookID, bookFileURL: formatURL,
                                  initialLocator: initialLocator, settings: settings)
-        // .pdf and .cbz cases are added by Tasks 6 and 9.
+        case .pdf:
+            return PDFNavigator(bookID: bookID, bookFileURL: formatURL, initialLocator: initialLocator)
+        // .cbz case is added by Task 9.
         default:
             return nil
         }

@@ -175,21 +175,17 @@ final class ReaderViewModel: NavigatorDelegate {
         (navigator as? Searchable)?.clearSearch()
     }
 
-    // TODO(Task 4/5): navigate via `hit.locator` once SearchHit carries one; for now (EPUB
-    // only) build the locator inline from the hit's cfi.
     func goToHit(_ hit: SearchHit) {
-        navigator.goTo(locator: Locator(spineIndex: 0, cfi: hit.cfi, totalProgression: 0))
+        navigator.goTo(locator: hit.locator)
     }
 
     func clearSelection() { currentSelection = nil; (navigator as? TextSelectable)?.deselect() }
 
-    // TODO(Task 6): build the locator from `sel.locator` once SelectionInfo carries one; for
-    // now (EPUB only) build it inline from the selection's cfi/textContext, as before.
+    // `sel.locator` is the selection's own format-neutral locator (EPUB: cfi+textContext; PDF:
+    // spineIndex+pageQuads+textQuote) — one path builds a highlight `Annotation` for both.
     func createHighlight(color: HighlightColor) {
         guard let sel = currentSelection else { return }
-        let locator = Locator(spineIndex: sel.spineIndex, cfi: sel.cfi,
-                              totalProgression: sel.totalProgression, textContext: sel.textContext)
-        let annotation = Annotation(id: UUID(), kind: .highlight, locator: locator, color: color,
+        let annotation = Annotation(id: UUID(), kind: .highlight, locator: sel.locator, color: color,
                                     note: nil, createdAt: Date(), modifiedAt: Date())
         do {
             try persist(annotation)
